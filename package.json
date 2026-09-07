@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "node --watch src/server.mjs",
-    "start": "node src/server.mjs",
+    "start": "node src/migrate.mjs && node src/server.mjs",
     "db:migrate": "node src/migrate.mjs"
   },
   "dependencies": {
