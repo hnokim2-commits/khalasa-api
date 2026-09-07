@@ -1,10 +1,10 @@
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
-CREATE TYPE user_role AS ENUM ('customer','merchant','rider','admin','support','accountant');
-CREATE TYPE order_status AS ENUM ('awaiting_merchant','preparing','awaiting_rider','assigned','picked_up','delivered','cancelled');
-CREATE TYPE verification_status AS ENUM ('pending','approved','rejected','needs_more_info');
+DO $$ BEGIN CREATE TYPE user_role AS ENUM ('customer','merchant','rider','admin','support','accountant'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN CREATE TYPE order_status AS ENUM ('awaiting_merchant','preparing','awaiting_rider','assigned','picked_up','delivered','cancelled'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN CREATE TYPE verification_status AS ENUM ('pending','approved','rejected','needs_more_info'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
-CREATE TABLE users (
+CREATE TABLE IF NOT EXISTS users (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   role user_role NOT NULL,
   phone varchar(20) NOT NULL UNIQUE,
@@ -14,7 +14,7 @@ CREATE TABLE users (
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 
-CREATE TABLE merchants (
+CREATE TABLE IF NOT EXISTS merchants (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   owner_user_id uuid NOT NULL REFERENCES users(id),
   display_name text NOT NULL,
@@ -27,7 +27,7 @@ CREATE TABLE merchants (
   created_at timestamptz NOT NULL DEFAULT now()
 );
 
-CREATE TABLE merchant_documents (
+CREATE TABLE IF NOT EXISTS merchant_documents (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   merchant_id uuid NOT NULL REFERENCES merchants(id) ON DELETE CASCADE,
   document_type text NOT NULL,
@@ -37,7 +37,7 @@ CREATE TABLE merchant_documents (
   created_at timestamptz NOT NULL DEFAULT now()
 );
 
-CREATE TABLE riders (
+CREATE TABLE IF NOT EXISTS riders (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id uuid NOT NULL UNIQUE REFERENCES users(id),
   vehicle_type text NOT NULL DEFAULT 'motorcycle',
@@ -48,7 +48,7 @@ CREATE TABLE riders (
   created_at timestamptz NOT NULL DEFAULT now()
 );
 
-CREATE TABLE rider_documents (
+CREATE TABLE IF NOT EXISTS rider_documents (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   rider_id uuid NOT NULL REFERENCES riders(id) ON DELETE CASCADE,
   document_type text NOT NULL,
@@ -57,7 +57,7 @@ CREATE TABLE rider_documents (
   created_at timestamptz NOT NULL DEFAULT now()
 );
 
-CREATE TABLE service_zones (
+CREATE TABLE IF NOT EXISTS service_zones (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   city text NOT NULL, name text NOT NULL,
   polygon_geojson jsonb NOT NULL,
@@ -65,13 +65,13 @@ CREATE TABLE service_zones (
   UNIQUE(city, name)
 );
 
-CREATE TABLE merchant_zones (
+CREATE TABLE IF NOT EXISTS merchant_zones (
   merchant_id uuid NOT NULL REFERENCES merchants(id) ON DELETE CASCADE,
   zone_id uuid NOT NULL REFERENCES service_zones(id) ON DELETE CASCADE,
   PRIMARY KEY(merchant_id, zone_id)
 );
 
-CREATE TABLE orders (
+CREATE TABLE IF NOT EXISTS orders (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   public_code varchar(24) NOT NULL UNIQUE,
   customer_id uuid NOT NULL REFERENCES users(id),
@@ -90,28 +90,28 @@ CREATE TABLE orders (
   created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now()
 );
 
-CREATE TABLE order_items (
+CREATE TABLE IF NOT EXISTS order_items (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   order_id uuid NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
   product_name text NOT NULL, quantity integer NOT NULL CHECK (quantity > 0),
   unit_price numeric(12,2) NOT NULL CHECK (unit_price >= 0)
 );
-CREATE TABLE order_events (
+CREATE TABLE IF NOT EXISTS order_events (
   id bigserial PRIMARY KEY, order_id uuid NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
   actor_user_id uuid REFERENCES users(id), status order_status NOT NULL, note text,
   created_at timestamptz NOT NULL DEFAULT now()
 );
-CREATE TABLE payments (
+CREATE TABLE IF NOT EXISTS payments (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(), order_id uuid NOT NULL UNIQUE REFERENCES orders(id),
   provider text, provider_reference text, amount numeric(12,2) NOT NULL,
   status text NOT NULL DEFAULT 'pending', created_at timestamptz NOT NULL DEFAULT now()
 );
-CREATE TABLE ratings (
+CREATE TABLE IF NOT EXISTS ratings (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(), order_id uuid NOT NULL UNIQUE REFERENCES orders(id),
   customer_id uuid NOT NULL REFERENCES users(id), merchant_stars smallint CHECK (merchant_stars BETWEEN 1 AND 5),
   rider_stars smallint CHECK (rider_stars BETWEEN 1 AND 5), comment text, created_at timestamptz NOT NULL DEFAULT now()
 );
 
-CREATE INDEX orders_merchant_status_idx ON orders(merchant_id, status, created_at DESC);
-CREATE INDEX orders_rider_status_idx ON orders(rider_id, status, created_at DESC);
-CREATE INDEX order_events_order_idx ON order_events(order_id, created_at);
+CREATE INDEX IF NOT EXISTS orders_merchant_status_idx ON orders(merchant_id, status, created_at DESC);
+CREATE INDEX IF NOT EXISTS orders_rider_status_idx ON orders(rider_id, status, created_at DESC);
+CREATE INDEX IF NOT EXISTS order_events_order_idx ON order_events(order_id, created_at);
