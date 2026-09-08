@@ -55,6 +55,23 @@ function cityPermission(permission) { return asyncRoute(async (req, res, next) =
   next();
 }); }
 function transitionAllowed(from, to) { return ({ awaiting_merchant:['preparing','cancelled'], preparing:['awaiting_rider','cancelled'], awaiting_rider:['assigned','cancelled'], assigned:['picked_up','cancelled'], picked_up:['delivered'], delivered:[], cancelled:[] })[from]?.includes(to); }
+async function deliverOtp(phone, otp) {
+  if(process.env.OTP_PROVIDER==='webhook'){
+    if(!process.env.OTP_WEBHOOK_URL)throw new Error('OTP_PROVIDER_NOT_CONFIGURED');
+    const response=await fetch(process.env.OTP_WEBHOOK_URL,{method:'POST',headers:{'Content-Type':'application/json','Authorization':`Bearer ${process.env.OTP_WEBHOOK_SECRET||''}`},body:JSON.stringify({phone,otp,purpose:'customer_login'})});
+    if(!response.ok)throw new Error(`OTP_DELIVERY_FAILED_${response.status}`);
+    return;
+  }
+  if(process.env.OTP_PROVIDER==='meta_whatsapp'){
+    const requiredMeta=['WHATSAPP_ACCESS_TOKEN','WHATSAPP_PHONE_NUMBER_ID','WHATSAPP_TEMPLATE_NAME','WHATSAPP_GRAPH_VERSION'];
+    if(requiredMeta.some(name=>!process.env[name]))throw new Error('OTP_PROVIDER_NOT_CONFIGURED');
+    const destination=`20${phone.slice(1)}`;
+    const response=await fetch(`https://graph.facebook.com/${process.env.WHATSAPP_GRAPH_VERSION}/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`,{method:'POST',headers:{'Content-Type':'application/json','Authorization':`Bearer ${process.env.WHATSAPP_ACCESS_TOKEN}`},body:JSON.stringify({messaging_product:'whatsapp',to:destination,type:'template',template:{name:process.env.WHATSAPP_TEMPLATE_NAME,language:{code:process.env.WHATSAPP_TEMPLATE_LANGUAGE||'ar'},components:[{type:'body',parameters:[{type:'text',text:otp}]},{type:'button',sub_type:'url',index:'0',parameters:[{type:'text',text:otp}]}]}})});
+    if(!response.ok)throw new Error(`OTP_DELIVERY_FAILED_${response.status}`);
+    return;
+  }
+  throw new Error('OTP_PROVIDER_NOT_CONFIGURED');
+}
 
 app.get('/health', asyncRoute(async (_req, res) => { await pool.query('SELECT 1'); res.json({ ok: true, service: 'khalasa-api' }); }));
 
@@ -67,11 +84,11 @@ app.patch('/v1/admin/main-users/:id',auth('admin'),asyncRoute(async(req,res)=>{i
 app.post('/v1/auth/request-otp', asyncRoute(async (req, res) => {
   const phone=String(req.body.phone||'');if(!/^01\d{9}$/.test(phone))return res.status(400).json({error:'INVALID_EGYPTIAN_PHONE'});
   const existing=await pool.query('SELECT role FROM users WHERE phone=$1',[phone]);if(existing.rowCount&&existing.rows[0].role!=='customer')return res.status(403).json({error:'STAFF_ACCOUNT_REQUIRES_STAFF_LOGIN'});
-  if(process.env.NODE_ENV==='production'&&(process.env.OTP_PROVIDER!=='webhook'||!process.env.OTP_WEBHOOK_URL))return res.status(503).json({error:'OTP_PROVIDER_NOT_CONFIGURED'});
+  if(process.env.NODE_ENV==='production'&&!['webhook','meta_whatsapp'].includes(process.env.OTP_PROVIDER))return res.status(503).json({error:'OTP_PROVIDER_NOT_CONFIGURED'});
   const otp=crypto.randomInt(100000,1000000).toString(),hash=crypto.createHmac('sha256',process.env.JWT_SECRET).update(`${phone}:${otp}`).digest('hex');
   await pool.query(`UPDATE auth_challenges SET consumed_at=now() WHERE phone=$1 AND purpose='customer_login' AND consumed_at IS NULL`,[phone]);
   await pool.query(`INSERT INTO auth_challenges(phone,otp_hash,expires_at) VALUES($1,$2,now()+interval '5 minutes')`,[phone,hash]);
-  if(process.env.NODE_ENV==='production'){const response=await fetch(process.env.OTP_WEBHOOK_URL,{method:'POST',headers:{'Content-Type':'application/json','Authorization':`Bearer ${process.env.OTP_WEBHOOK_SECRET||''}`},body:JSON.stringify({phone,otp,purpose:'customer_login'})});if(!response.ok)return res.status(502).json({error:'OTP_DELIVERY_FAILED'});}
+  if(process.env.NODE_ENV==='production'){try{await deliverOtp(phone,otp);}catch(error){if(error.message==='OTP_PROVIDER_NOT_CONFIGURED')return res.status(503).json({error:'OTP_PROVIDER_NOT_CONFIGURED'});return res.status(502).json({error:'OTP_DELIVERY_FAILED'});}}
   res.status(202).json({accepted:true,...(process.env.NODE_ENV!=='production'?{devOtp:otp}:{})});
 }));
 app.post('/v1/auth/verify-otp',asyncRoute(async(req,res)=>{const phone=String(req.body.phone||''),fullName=String(req.body.fullName||'').trim(),otp=String(req.body.otp||'');if(!/^01\d{9}$/.test(phone)||!fullName||!/^\d{6}$/.test(otp))return res.status(400).json({error:'INVALID_VERIFICATION_FIELDS'});const challenge=await pool.query(`SELECT id,otp_hash,attempts FROM auth_challenges WHERE phone=$1 AND purpose='customer_login' AND consumed_at IS NULL AND expires_at>now() ORDER BY created_at DESC LIMIT 1`,[phone]);if(!challenge.rowCount||challenge.rows[0].attempts>=5)return res.status(401).json({error:'OTP_INVALID_OR_EXPIRED'});const hash=crypto.createHmac('sha256',process.env.JWT_SECRET).update(`${phone}:${otp}`).digest('hex');const valid=crypto.timingSafeEqual(Buffer.from(hash,'hex'),Buffer.from(challenge.rows[0].otp_hash,'hex'));if(!valid){await pool.query('UPDATE auth_challenges SET attempts=attempts+1 WHERE id=$1',[challenge.rows[0].id]);return res.status(401).json({error:'OTP_INVALID_OR_EXPIRED'});}const client=await pool.connect();try{await client.query('BEGIN');await client.query('UPDATE auth_challenges SET consumed_at=now() WHERE id=$1',[challenge.rows[0].id]);let user=await client.query('SELECT id,role,phone,full_name FROM users WHERE phone=$1',[phone]);if(user.rowCount&&user.rows[0].role!=='customer'){await client.query('ROLLBACK');return res.status(403).json({error:'STAFF_ACCOUNT_REQUIRES_STAFF_LOGIN'});}if(!user.rowCount)user=await client.query(`INSERT INTO users(role,phone,full_name,is_phone_verified) VALUES('customer',$1,$2,true) RETURNING id,role,phone,full_name`,[phone,fullName]);else user=await client.query(`UPDATE users SET full_name=$1,is_phone_verified=true,updated_at=now() WHERE id=$2 RETURNING id,role,phone,full_name`,[fullName,user.rows[0].id]);await client.query('COMMIT');res.json({token:tokenFor(user.rows[0]),user:user.rows[0]});}catch(error){await client.query('ROLLBACK');throw error;}finally{client.release();}}));
