@@ -176,6 +176,18 @@ app.post('/v1/orders', auth('customer'), asyncRoute(async (req, res) => {
   } catch(error){await client.query('ROLLBACK');throw error;}finally{client.release();}
 }));
 
+app.get('/v1/customer/orders', auth('customer'), asyncRoute(async (req,res)=>{
+  const rows=await pool.query(`SELECT id,public_code,status,delivery_address,merchandise_total,delivery_fee,created_at,updated_at FROM orders WHERE customer_id=$1 ORDER BY created_at DESC LIMIT 20`,[req.user.sub]);
+  res.json({orders:rows.rows});
+}));
+app.post('/v1/customer/orders/:id/reset-delivery-code', auth('customer'), asyncRoute(async(req,res)=>{
+  const otp=crypto.randomInt(1000,10000).toString();
+  const order=await pool.query(`UPDATE orders SET delivery_otp_hash=$1,delivery_otp_attempts=0,delivery_otp_locked_at=NULL,updated_at=now() WHERE id=$2 AND customer_id=$3 AND status IN ('assigned','picked_up') RETURNING id,public_code,status`,[otpHash(otp),req.params.id,req.user.sub]);
+  if(!order.rowCount)return res.status(409).json({error:'ORDER_NOT_READY_FOR_DELIVERY_CODE'});
+  await pool.query(`INSERT INTO order_events(order_id,actor_user_id,status,note) VALUES($1,$2,$3,'أعاد العميل إصدار رمز التسليم')`,[order.rows[0].id,req.user.sub,order.rows[0].status]);
+  res.json({order:{...order.rows[0],deliveryOtp:otp}});
+}));
+
 app.get('/v1/merchant/orders', auth('merchant'), asyncRoute(async (req, res) => { const rows = await pool.query(`SELECT o.* FROM orders o JOIN merchants m ON m.id=o.merchant_id WHERE m.owner_user_id=$1 AND o.status IN ('awaiting_merchant','preparing') ORDER BY o.created_at DESC`, [req.user.sub]); res.json({ orders: rows.rows }); }));
 app.post('/v1/orders/:id/merchant-accept', auth('merchant'), asyncRoute(async (req, res) => { const prepMinutes = Number(req.body.prepMinutes || 20); const order = await pool.query(`SELECT o.* FROM orders o JOIN merchants m ON m.id=o.merchant_id WHERE o.id=$1 AND m.owner_user_id=$2`, [req.params.id, req.user.sub]); if (!order.rowCount) return res.status(404).json({ error: 'ORDER_NOT_FOUND' }); if (!transitionAllowed(order.rows[0].status, 'preparing')) return res.status(409).json({ error: 'INVALID_STATE' }); await pool.query(`UPDATE orders SET status='preparing',prep_minutes=$1,updated_at=now() WHERE id=$2`, [prepMinutes, req.params.id]); await pool.query(`INSERT INTO order_events(order_id,actor_user_id,status,note) VALUES($1,$2,'preparing',$3)`, [req.params.id, req.user.sub, `وقت التجهيز ${prepMinutes} دقيقة`]); res.json({ ok:true }); }));
 app.post('/v1/orders/:id/ready', auth('merchant'), asyncRoute(async (req, res) => { const result = await pool.query(`UPDATE orders o SET status='awaiting_rider',updated_at=now() FROM merchants m WHERE o.id=$1 AND o.status='preparing' AND m.id=o.merchant_id AND m.owner_user_id=$2 RETURNING o.id`, [req.params.id,req.user.sub]); if (!result.rowCount) return res.status(409).json({ error:'INVALID_STATE_OR_OWNER' }); await pool.query(`INSERT INTO order_events(order_id,actor_user_id,status,note) VALUES($1,$2,'awaiting_rider','الطلب جاهز للاستلام')`, [req.params.id,req.user.sub]); res.json({ ok:true }); }));
