@@ -220,6 +220,14 @@ app.get('/v1/admin/order-details/:code', auth('admin','support'), asyncRoute(asy
   ]);
   res.json({order:order.rows[0],items:items.rows,events:events.rows});
 }));
+app.get('/v1/admin/overview', auth('admin','support'), asyncRoute(async(_req,res)=>{
+  const [orders,partners,approvals]=await Promise.all([
+    pool.query(`SELECT count(*) FILTER (WHERE created_at>=date_trunc('day',now()))::int orders_today,count(*) FILTER (WHERE status NOT IN ('delivered','cancelled'))::int active_orders,count(*) FILTER (WHERE status='awaiting_merchant')::int awaiting_merchant,count(*) FILTER (WHERE status='preparing')::int preparing,count(*) FILTER (WHERE status='awaiting_rider')::int awaiting_rider,count(*) FILTER (WHERE status IN ('assigned','picked_up'))::int on_the_way,COALESCE(sum(platform_commission) FILTER (WHERE status='delivered' AND updated_at>=date_trunc('day',now())),0) commission_today FROM orders`),
+    pool.query(`SELECT count(*) FILTER (WHERE verification='approved' AND is_accepting_orders=true)::int active_merchants FROM merchants`),
+    pool.query(`SELECT count(*) FILTER (WHERE status='pending')::int pending_approvals FROM city_partner_requests`)
+  ]);
+  res.json({overview:{...orders.rows[0],...partners.rows[0],...approvals.rows[0]}});
+}));
 
 app.get('/v1/admin/cities', auth('admin'), asyncRoute(async (_req,res)=>{const rows=await pool.query(`SELECT c.*,count(DISTINCT a.user_id)::int admin_count FROM cities c LEFT JOIN city_admin_assignments a ON a.city_id=c.id AND a.is_active=true GROUP BY c.id ORDER BY c.governorate,c.name`);res.json({cities:rows.rows});}));
 app.post('/v1/admin/cities', auth('admin'), asyncRoute(async (req,res)=>{const {governorate,name,code}=req.body;if(!governorate||!name||!/^[a-z0-9-]{3,60}$/.test(String(code||'')))return res.status(400).json({error:'CITY_FIELDS_REQUIRED'});const row=await pool.query(`INSERT INTO cities(governorate,name,code) VALUES($1,$2,$3) RETURNING *`,[governorate,name,code]);res.status(201).json({city:row.rows[0]});}));
