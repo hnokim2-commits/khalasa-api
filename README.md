@@ -1,20 +1,13 @@
-# Khalasa API
-
-خادم التشغيل الحقيقي لتطبيقات العميل والمحل والمندوب والإدارة. الواجهة المنشورة على Netlify تبقى واجهة فقط؛ هذا الخادم ينشر منفصلاً مع قاعدة PostgreSQL.
-
-## تشغيل محلي
-
-1. انسخ `.env.example` إلى `.env` وعدّل `JWT_SECRET`.
-2. شغّل PostgreSQL: `docker compose up -d`.
-3. ثبّت الحزم: `npm install`.
-4. أنشئ الجداول: `npm run db:migrate`.
-5. شغّل الخادم: `npm run dev`.
-
-## قبل النشر الفعلي
-
-- أنشئ PostgreSQL مستضافاً وأدخل `DATABASE_URL` في إعدادات الخادم، لا في Netlify.
-- اضبط `NODE_ENV=production` و`CORS_ORIGINS` على رابط خالصة فقط.
-- استخدم مزود SMS حقيقي لـOTP؛ لا تفعّل التسجيل الحقيقي قبل ذلك.
-- استخدم مساحة تخزين خاصة للمستندات ولا تضع صور البطاقات في رابط عام.
-- أضف مزود دفع معتمد وWebhook مُوقّع لتأكيد المدفوعات.
-- لا تحفظ كلمات مرور الكاشير أو Meta؛ الربط يكون OAuth أو API key مشفّر على الخادم.
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: khalasa
+      POSTGRES_USER: khalasa
+      POSTGRES_PASSWORD: khalasa_dev_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - khalasa_pg_data:/var/lib/postgresql/data
+volumes:
+  khalasa_pg_data:

@@ -1,13 +1,20 @@
-services:
-  postgres:
-    image: postgres:16-alpine
-    environment:
-      POSTGRES_DB: khalasa
-      POSTGRES_USER: khalasa
-      POSTGRES_PASSWORD: khalasa_dev_password
-    ports:
-      - "5432:5432"
-    volumes:
-      - khalasa_pg_data:/var/lib/postgresql/data
-volumes:
-  khalasa_pg_data:
+NODE_ENV=development
+PORT=8080
+DATABASE_URL=postgresql://khalasa:khalasa_dev_password@localhost:5432/khalasa
+JWT_SECRET=replace_with_a_long_random_secret_before_production
+CORS_ORIGINS=https://your-site.netlify.app,http://localhost:4173
+PLATFORM_COMMISSION_RATE=0.12
+# Configure a real OTP delivery webhook before production. Development returns devOtp only.
+OTP_PROVIDER=disabled
+OTP_WEBHOOK_URL=
+OTP_WEBHOOK_SECRET=
+# Direct Meta WhatsApp Cloud API alternative: set OTP_PROVIDER=meta_whatsapp.
+WHATSAPP_ACCESS_TOKEN=
+WHATSAPP_PHONE_NUMBER_ID=
+WHATSAPP_TEMPLATE_NAME=
+WHATSAPP_TEMPLATE_LANGUAGE=ar
+WHATSAPP_GRAPH_VERSION=v23.0
+# Email OTP alternative: set OTP_PROVIDER=resend_email.
+RESEND_API_KEY=
+OTP_EMAIL_FROM=Khalasa <otp@send.khalasa-eg.com>
+STORAGE_PROVIDER=private-object-storage

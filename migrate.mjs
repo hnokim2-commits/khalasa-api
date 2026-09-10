@@ -1,4 +1,4 @@
-ALTER TABLE users ADD COLUMN IF NOT EXISTS email text;
-ALTER TABLE users ADD COLUMN IF NOT EXISTS is_email_verified boolean NOT NULL DEFAULT false;
-ALTER TABLE auth_challenges ADD COLUMN IF NOT EXISTS email text;
-CREATE UNIQUE INDEX IF NOT EXISTS users_customer_email_idx ON users(lower(email)) WHERE email IS NOT NULL AND role='customer';
+ALTER TABLE orders
+  ADD COLUMN IF NOT EXISTS delivery_otp_attempts integer NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS delivery_otp_locked_at timestamptz;
+
