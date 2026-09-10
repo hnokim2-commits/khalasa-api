@@ -211,6 +211,15 @@ app.post('/v1/orders/:id/deliver', auth('rider'), asyncRoute(async (req,res) => 
   res.json({ok:true});
 }));
 app.get('/v1/admin/orders', auth('admin','support'), asyncRoute(async (_req,res)=>{const rows=await pool.query(`SELECT o.*,u.full_name customer_name,m.display_name merchant_name FROM orders o JOIN users u ON u.id=o.customer_id JOIN merchants m ON m.id=o.merchant_id ORDER BY o.created_at DESC LIMIT 200`);res.json({orders:rows.rows});}));
+app.get('/v1/admin/order-details/:code', auth('admin','support'), asyncRoute(async(req,res)=>{
+  const order=await pool.query(`SELECT o.id,o.public_code,o.status,o.delivery_address,o.payment_method,o.merchandise_total,o.delivery_fee,o.platform_commission,o.merchant_payout,o.created_at,o.updated_at,customer.full_name customer_name,merchant.display_name merchant_name,rider_user.full_name rider_name FROM orders o JOIN users customer ON customer.id=o.customer_id JOIN merchants merchant ON merchant.id=o.merchant_id LEFT JOIN riders rider ON rider.id=o.rider_id LEFT JOIN users rider_user ON rider_user.id=rider.user_id WHERE o.public_code=$1`,[req.params.code]);
+  if(!order.rowCount)return res.status(404).json({error:'ORDER_NOT_FOUND'});
+  const id=order.rows[0].id,[items,events]=await Promise.all([
+    pool.query(`SELECT product_name,quantity,unit_price FROM order_items WHERE order_id=$1 ORDER BY id`,[id]),
+    pool.query(`SELECT e.status,e.note,e.created_at,u.full_name actor_name,u.role actor_role FROM order_events e LEFT JOIN users u ON u.id=e.actor_user_id WHERE e.order_id=$1 ORDER BY e.created_at`,[id])
+  ]);
+  res.json({order:order.rows[0],items:items.rows,events:events.rows});
+}));
 
 app.get('/v1/admin/cities', auth('admin'), asyncRoute(async (_req,res)=>{const rows=await pool.query(`SELECT c.*,count(DISTINCT a.user_id)::int admin_count FROM cities c LEFT JOIN city_admin_assignments a ON a.city_id=c.id AND a.is_active=true GROUP BY c.id ORDER BY c.governorate,c.name`);res.json({cities:rows.rows});}));
 app.post('/v1/admin/cities', auth('admin'), asyncRoute(async (req,res)=>{const {governorate,name,code}=req.body;if(!governorate||!name||!/^[a-z0-9-]{3,60}$/.test(String(code||'')))return res.status(400).json({error:'CITY_FIELDS_REQUIRED'});const row=await pool.query(`INSERT INTO cities(governorate,name,code) VALUES($1,$2,$3) RETURNING *`,[governorate,name,code]);res.status(201).json({city:row.rows[0]});}));
