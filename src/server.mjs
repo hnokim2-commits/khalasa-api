@@ -9,12 +9,25 @@ const { Pool } = pg;
 const required = ['DATABASE_URL', 'JWT_SECRET'];
 for (const name of required) if (!process.env[name]) throw new Error(`${name} is required`);
 const app = express();
+app.disable('x-powered-by');
+if (process.env.NODE_ENV === 'production') app.set('trust proxy', 1);
 const port = Number(process.env.PORT || 8080);
 const commissionRate = Number(process.env.PLATFORM_COMMISSION_RATE || 0.12);
 const allowedOrigins = (process.env.CORS_ORIGINS || '').split(',').filter(Boolean);
 const pool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false });
 app.use(cors({ origin(origin, callback) { if (!origin || allowedOrigins.includes(origin)) return callback(null, true); callback(new Error('CORS_NOT_ALLOWED')); } }));
 app.use(express.json({ limit: '1mb' }));
+app.use((_req, res, next) => {
+  res.set({
+    'X-Content-Type-Options': 'nosniff',
+    'X-Frame-Options': 'DENY',
+    'Referrer-Policy': 'no-referrer',
+    'Permissions-Policy': 'camera=(), microphone=(), geolocation=()',
+    'Cache-Control': 'no-store'
+  });
+  if (process.env.NODE_ENV === 'production') res.set('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  next();
+});
 
 const requestWindows = new Map();
 function rateLimit({ limit = 5, windowMs = 10 * 60 * 1000, key = req => req.ip }) {
@@ -36,6 +49,8 @@ function rateLimit({ limit = 5, windowMs = 10 * 60 * 1000, key = req => req.ip }
 }
 const authRateLimit = rateLimit({ limit: 8, key: req => `${req.ip}:${String(req.body?.phone || '')}` });
 app.use((req, res, next) => ['/v1/staff/login', '/v1/auth/request-otp', '/v1/auth/verify-otp'].includes(req.path) ? authRateLimit(req, res, next) : next());
+const cleanupTimer = setInterval(() => { const now=Date.now(); for (const [key,bucket] of requestWindows) if (bucket.resetAt <= now) requestWindows.delete(key); }, 10 * 60 * 1000);
+cleanupTimer.unref();
 
 const asyncRoute = handler => (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next);
 const publicCode = () => `KH-${Date.now().toString(36).toUpperCase()}-${crypto.randomBytes(2).toString('hex').toUpperCase()}`;
@@ -88,9 +103,13 @@ app.post('/v1/admin/main-users',auth('admin'),asyncRoute(async(req,res)=>{const 
 app.patch('/v1/admin/main-users/:id',auth('admin'),asyncRoute(async(req,res)=>{if(req.params.id===req.user.sub)return res.status(409).json({error:'CANNOT_DISABLE_SELF'});const row=await pool.query(`UPDATE staff_credentials SET is_active=$1,updated_at=now() WHERE user_id=$2 RETURNING user_id,is_active`,[req.body.isActive===true,req.params.id]);if(!row.rowCount)return res.status(404).json({error:'ADMIN_USER_NOT_FOUND'});res.json({user:row.rows[0]});}));
 
 app.post('/v1/auth/request-otp', asyncRoute(async (req, res) => {
-  const phone=String(req.body.phone||''),email=String(req.body.email||'').trim().toLowerCase();if(!/^01\d{9}$/.test(phone))return res.status(400).json({error:'INVALID_EGYPTIAN_PHONE'});
+  const phone=String(req.body.phone||'').trim(),email=String(req.body.email||'').trim().toLowerCase();
+  if(!/^01\d{9}$/.test(phone))return res.status(400).json({error:'INVALID_EGYPTIAN_PHONE'});
   if(process.env.OTP_PROVIDER==='resend_email'&&!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))return res.status(400).json({error:'INVALID_EMAIL'});
-  const existing=await pool.query('SELECT role FROM users WHERE phone=$1',[phone]);if(existing.rowCount&&existing.rows[0].role!=='customer')return res.status(403).json({error:'STAFF_ACCOUNT_REQUIRES_STAFF_LOGIN'});
+  const existing=await pool.query('SELECT role,phone,email,is_email_verified FROM users WHERE phone=$1 OR lower(email)=lower($2)',[phone,email]);
+  if(existing.rows.some(user=>user.role!=='customer'))return res.status(403).json({error:'STAFF_ACCOUNT_REQUIRES_STAFF_LOGIN'});
+  if(existing.rows.some(user=>user.email&&user.email.toLowerCase()===email&&user.phone!==phone))return res.status(409).json({error:'EMAIL_ALREADY_IN_USE'});
+  if(existing.rows.some(user=>user.phone===phone&&user.is_email_verified&&user.email?.toLowerCase()!==email))return res.status(409).json({error:'PHONE_ALREADY_IN_USE'});
   if(process.env.NODE_ENV==='production'&&!['webhook','meta_whatsapp','resend_email'].includes(process.env.OTP_PROVIDER))return res.status(503).json({error:'OTP_PROVIDER_NOT_CONFIGURED'});
   const otp=crypto.randomInt(100000,1000000).toString(),hash=crypto.createHmac('sha256',process.env.JWT_SECRET).update(`${phone}:${otp}`).digest('hex');
   await pool.query(`UPDATE auth_challenges SET consumed_at=now() WHERE phone=$1 AND purpose='customer_login' AND consumed_at IS NULL`,[phone]);
@@ -98,13 +117,35 @@ app.post('/v1/auth/request-otp', asyncRoute(async (req, res) => {
   if(process.env.NODE_ENV==='production'){try{await deliverOtp({phone,email},otp);}catch(error){if(error.message==='OTP_PROVIDER_NOT_CONFIGURED')return res.status(503).json({error:'OTP_PROVIDER_NOT_CONFIGURED'});return res.status(502).json({error:'OTP_DELIVERY_FAILED'});}}
   res.status(202).json({accepted:true,...(process.env.NODE_ENV!=='production'?{devOtp:otp}:{})});
 }));
-app.post('/v1/auth/verify-otp',asyncRoute(async(req,res)=>{const phone=String(req.body.phone||''),fullName=String(req.body.fullName||'').trim(),otp=String(req.body.otp||'');if(!/^01\d{9}$/.test(phone)||!fullName||!/^\d{6}$/.test(otp))return res.status(400).json({error:'INVALID_VERIFICATION_FIELDS'});const challenge=await pool.query(`SELECT id,email,otp_hash,attempts FROM auth_challenges WHERE phone=$1 AND purpose='customer_login' AND consumed_at IS NULL AND expires_at>now() ORDER BY created_at DESC LIMIT 1`,[phone]);if(!challenge.rowCount||challenge.rows[0].attempts>=5)return res.status(401).json({error:'OTP_INVALID_OR_EXPIRED'});const hash=crypto.createHmac('sha256',process.env.JWT_SECRET).update(`${phone}:${otp}`).digest('hex');const valid=crypto.timingSafeEqual(Buffer.from(hash,'hex'),Buffer.from(challenge.rows[0].otp_hash,'hex'));if(!valid){await pool.query('UPDATE auth_challenges SET attempts=attempts+1 WHERE id=$1',[challenge.rows[0].id]);return res.status(401).json({error:'OTP_INVALID_OR_EXPIRED'});}const client=await pool.connect();try{await client.query('BEGIN');await client.query('UPDATE auth_challenges SET consumed_at=now() WHERE id=$1',[challenge.rows[0].id]);let user=await client.query('SELECT id,role,phone,full_name,email FROM users WHERE phone=$1',[phone]);if(user.rowCount&&user.rows[0].role!=='customer'){await client.query('ROLLBACK');return res.status(403).json({error:'STAFF_ACCOUNT_REQUIRES_STAFF_LOGIN'});}if(!user.rowCount)user=await client.query(`INSERT INTO users(role,phone,full_name,email,is_phone_verified,is_email_verified) VALUES('customer',$1,$2,$3,false,true) RETURNING id,role,phone,full_name,email`,[phone,fullName,challenge.rows[0].email]);else user=await client.query(`UPDATE users SET full_name=$1,email=COALESCE($2,email),is_email_verified=true,updated_at=now() WHERE id=$3 RETURNING id,role,phone,full_name,email`,[fullName,challenge.rows[0].email,user.rows[0].id]);await client.query('COMMIT');res.json({token:tokenFor(user.rows[0]),user:user.rows[0]});}catch(error){await client.query('ROLLBACK');throw error;}finally{client.release();}}));
+app.post('/v1/auth/verify-otp',asyncRoute(async(req,res)=>{
+  const phone=String(req.body.phone||'').trim(),email=String(req.body.email||'').trim().toLowerCase(),fullName=String(req.body.fullName||'').trim(),otp=String(req.body.otp||'');
+  if(!/^01\d{9}$/.test(phone)||!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)||!fullName||fullName.length>120||!/^\d{6}$/.test(otp))return res.status(400).json({error:'INVALID_VERIFICATION_FIELDS'});
+  const challenge=await pool.query(`SELECT id,email,otp_hash,attempts FROM auth_challenges WHERE phone=$1 AND lower(email)=lower($2) AND purpose='customer_login' AND consumed_at IS NULL AND expires_at>now() ORDER BY created_at DESC LIMIT 1`,[phone,email]);
+  if(!challenge.rowCount||challenge.rows[0].attempts>=5)return res.status(401).json({error:'OTP_INVALID_OR_EXPIRED'});
+  const hash=crypto.createHmac('sha256',process.env.JWT_SECRET).update(`${phone}:${otp}`).digest('hex');
+  const valid=crypto.timingSafeEqual(Buffer.from(hash,'hex'),Buffer.from(challenge.rows[0].otp_hash,'hex'));
+  if(!valid){await pool.query('UPDATE auth_challenges SET attempts=attempts+1 WHERE id=$1',[challenge.rows[0].id]);return res.status(401).json({error:'OTP_INVALID_OR_EXPIRED'});}
+  const client=await pool.connect();
+  try{
+    await client.query('BEGIN');
+    await client.query('UPDATE auth_challenges SET consumed_at=now() WHERE id=$1',[challenge.rows[0].id]);
+    const conflicts=await client.query(`SELECT id,role,phone,email,is_email_verified FROM users WHERE phone=$1 OR lower(email)=lower($2) FOR UPDATE`,[phone,email]);
+    if(conflicts.rows.some(user=>user.role!=='customer')){await client.query('ROLLBACK');return res.status(403).json({error:'STAFF_ACCOUNT_REQUIRES_STAFF_LOGIN'});}
+    if(conflicts.rows.some(user=>user.email?.toLowerCase()===email&&user.phone!==phone)){await client.query('ROLLBACK');return res.status(409).json({error:'EMAIL_ALREADY_IN_USE'});}
+    if(conflicts.rows.some(user=>user.phone===phone&&user.is_email_verified&&user.email?.toLowerCase()!==email)){await client.query('ROLLBACK');return res.status(409).json({error:'PHONE_ALREADY_IN_USE'});}
+    let user=await client.query('SELECT id,role,phone,full_name,email FROM users WHERE lower(email)=lower($1)',[email]);
+    if(!user.rowCount)user=await client.query(`INSERT INTO users(role,phone,full_name,email,is_phone_verified,is_email_verified) VALUES('customer',$1,$2,$3,false,true) RETURNING id,role,phone,full_name,email`,[phone,fullName,email]);
+    else user=await client.query(`UPDATE users SET full_name=$1,phone=$2,is_email_verified=true,updated_at=now() WHERE id=$3 RETURNING id,role,phone,full_name,email`,[fullName,phone,user.rows[0].id]);
+    await client.query('COMMIT');res.json({token:tokenFor(user.rows[0]),user:user.rows[0]});
+  }catch(error){await client.query('ROLLBACK');throw error;}finally{client.release();}
+}));
 app.post('/v1/auth/session',(_req,res)=>res.status(410).json({error:'OTP_VERIFICATION_REQUIRED'}));
 
 app.post('/v1/orders', auth('customer'), asyncRoute(async (req, res) => {
   const { merchantId, items, deliveryAddress, deliveryLat, deliveryLng, paymentMethod = 'cod' } = req.body;
   if (!merchantId || !Array.isArray(items) || !items.length || !deliveryAddress) return res.status(400).json({ error: 'ORDER_FIELDS_REQUIRED' });
-  if (!['cod','wallet','card'].includes(paymentMethod)) return res.status(400).json({ error: 'INVALID_PAYMENT_METHOD' });
+  // Electronic payments remain disabled until a signed provider webhook is implemented.
+  if (paymentMethod !== 'cod') return res.status(400).json({ error: 'PAYMENT_METHOD_NOT_AVAILABLE' });
   const requested = items.map(item => ({ productId:String(item.productId || ''),quantity:Number(item.quantity || item.qty) }));
   if (requested.some(item => !item.productId || !Number.isInteger(item.quantity) || item.quantity < 1 || item.quantity > 50)) return res.status(400).json({ error: 'INVALID_ITEMS' });
   const idempotencyKey=String(req.headers['x-idempotency-key']||'');
@@ -135,7 +176,22 @@ app.post('/v1/orders/:id/ready', auth('merchant'), asyncRoute(async (req, res) =
 app.get('/v1/rider/offers', auth('rider'), asyncRoute(async (req, res) => { const rows = await pool.query(`SELECT o.id,o.public_code,o.merchant_id,o.delivery_address,o.delivery_fee,o.created_at FROM orders o JOIN riders r ON r.user_id=$1 AND r.verification='approved' AND r.is_available=true WHERE o.status='awaiting_rider' AND o.city_id=r.city_id ORDER BY o.created_at ASC LIMIT 20`,[req.user.sub]); res.json({ orders:rows.rows }); }));
 app.post('/v1/orders/:id/rider-accept', auth('rider'), asyncRoute(async (req,res) => { const rider = await pool.query('SELECT id,city_id FROM riders WHERE user_id=$1 AND verification=$2 AND is_available=true',[req.user.sub,'approved']); if(!rider.rowCount) return res.status(403).json({error:'RIDER_NOT_AVAILABLE_OR_APPROVED'}); const result=await pool.query(`UPDATE orders SET status='assigned',rider_id=$1,updated_at=now() WHERE id=$2 AND city_id=$3 AND status='awaiting_rider' RETURNING id`,[rider.rows[0].id,req.params.id,rider.rows[0].city_id]); if(!result.rowCount)return res.status(409).json({error:'ORDER_ALREADY_TAKEN_OR_OUTSIDE_CITY'}); await pool.query(`INSERT INTO order_events(order_id,actor_user_id,status,note) VALUES($1,$2,'assigned','تم قبول الطلب بواسطة المندوب')`,[req.params.id,req.user.sub]);res.json({ok:true}); }));
 app.post('/v1/orders/:id/pickup', auth('rider'), asyncRoute(async (req,res) => { const result=await pool.query(`UPDATE orders o SET status='picked_up',updated_at=now() FROM riders r WHERE o.id=$1 AND o.status='assigned' AND o.rider_id=r.id AND r.user_id=$2 RETURNING o.id`,[req.params.id,req.user.sub]);if(!result.rowCount)return res.status(409).json({error:'ORDER_NOT_ASSIGNED_TO_RIDER'});await pool.query(`INSERT INTO order_events(order_id,actor_user_id,status,note) VALUES($1,$2,'picked_up','تم استلام الطلب من المحل')`,[req.params.id,req.user.sub]);res.json({ok:true}); }));
-app.post('/v1/orders/:id/deliver', auth('rider'), asyncRoute(async (req,res) => { const order=await pool.query(`SELECT o.* FROM orders o JOIN riders r ON r.id=o.rider_id WHERE o.id=$1 AND r.user_id=$2`,[req.params.id,req.user.sub]); if(!order.rowCount)return res.status(404).json({error:'ORDER_NOT_ASSIGNED_TO_RIDER'}); if(order.rows[0].status!=='picked_up'||otpHash(req.body.otp)!==order.rows[0].delivery_otp_hash)return res.status(409).json({error:'INVALID_DELIVERY_CONFIRMATION'}); await pool.query(`UPDATE orders SET status='delivered',updated_at=now() WHERE id=$1`,[req.params.id]);await pool.query(`INSERT INTO order_events(order_id,actor_user_id,status,note) VALUES($1,$2,'delivered','تم التسليم برمز العميل')`,[req.params.id,req.user.sub]);res.json({ok:true}); }));
+app.post('/v1/orders/:id/deliver', auth('rider'), asyncRoute(async (req,res) => {
+  const otp=String(req.body.otp||'');
+  if(!/^\d{4}$/.test(otp))return res.status(400).json({error:'INVALID_DELIVERY_CONFIRMATION'});
+  const order=await pool.query(`SELECT o.* FROM orders o JOIN riders r ON r.id=o.rider_id WHERE o.id=$1 AND r.user_id=$2`,[req.params.id,req.user.sub]);
+  if(!order.rowCount)return res.status(404).json({error:'ORDER_NOT_ASSIGNED_TO_RIDER'});
+  const current=order.rows[0];
+  if(current.delivery_otp_locked_at||current.delivery_otp_attempts>=5)return res.status(423).json({error:'DELIVERY_CONFIRMATION_LOCKED'});
+  if(current.status!=='picked_up'||otpHash(otp)!==current.delivery_otp_hash){
+    await pool.query(`UPDATE orders SET delivery_otp_attempts=delivery_otp_attempts+1,delivery_otp_locked_at=CASE WHEN delivery_otp_attempts+1>=5 THEN now() ELSE delivery_otp_locked_at END,updated_at=now() WHERE id=$1`,[req.params.id]);
+    return res.status(409).json({error:'INVALID_DELIVERY_CONFIRMATION'});
+  }
+  const delivered=await pool.query(`UPDATE orders SET status='delivered',updated_at=now() WHERE id=$1 AND status='picked_up' RETURNING id`,[req.params.id]);
+  if(!delivered.rowCount)return res.status(409).json({error:'INVALID_ORDER_TRANSITION'});
+  await pool.query(`INSERT INTO order_events(order_id,actor_user_id,status,note) VALUES($1,$2,'delivered','تم التسليم برمز العميل')`,[req.params.id,req.user.sub]);
+  res.json({ok:true});
+}));
 app.get('/v1/admin/orders', auth('admin','support'), asyncRoute(async (_req,res)=>{const rows=await pool.query(`SELECT o.*,u.full_name customer_name,m.display_name merchant_name FROM orders o JOIN users u ON u.id=o.customer_id JOIN merchants m ON m.id=o.merchant_id ORDER BY o.created_at DESC LIMIT 200`);res.json({orders:rows.rows});}));
 
 app.get('/v1/admin/cities', auth('admin'), asyncRoute(async (_req,res)=>{const rows=await pool.query(`SELECT c.*,count(DISTINCT a.user_id)::int admin_count FROM cities c LEFT JOIN city_admin_assignments a ON a.city_id=c.id AND a.is_active=true GROUP BY c.id ORDER BY c.governorate,c.name`);res.json({cities:rows.rows});}));
