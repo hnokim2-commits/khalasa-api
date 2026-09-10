@@ -13,7 +13,7 @@ app.disable('x-powered-by');
 if (process.env.NODE_ENV === 'production') app.set('trust proxy', 1);
 const port = Number(process.env.PORT || 8080);
 const commissionRate = Number(process.env.PLATFORM_COMMISSION_RATE || 0.12);
-const allowedOrigins = (process.env.CORS_ORIGINS || '').split(',').filter(Boolean);
+const allowedOrigins = (process.env.CORS_ORIGINS || '').split(',').map(value=>value.trim().replace(/\/$/, '')).filter(Boolean);
 const pool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false });
 app.use(cors({ origin(origin, callback) { if (!origin || allowedOrigins.includes(origin)) return callback(null, true); callback(new Error('CORS_NOT_ALLOWED')); } }));
 app.use(express.json({ limit: '1mb' }));
@@ -95,6 +95,10 @@ async function deliverOtp({ phone, email }, otp) {
 }
 
 app.get('/health', asyncRoute(async (_req, res) => { await pool.query('SELECT 1'); res.json({ ok: true, service: 'khalasa-api' }); }));
+app.get('/v1/catalog', asyncRoute(async (_req,res)=>{
+  const rows=await pool.query(`SELECT p.id product_id,p.name product_name,p.price,m.id merchant_id,m.display_name merchant_name,m.category,m.minimum_order,m.city_id FROM products p JOIN merchants m ON m.id=p.merchant_id WHERE p.is_available=true AND m.is_accepting_orders=true AND m.verification='approved' ORDER BY m.display_name,p.name LIMIT 200`);
+  res.json({products:rows.rows});
+}));
 
 app.post('/v1/staff/login', asyncRoute(async (req,res)=>{const phone=String(req.body.phone||''),accessCode=String(req.body.accessCode||'');if(!/^01\d{9}$/.test(phone)||accessCode.length<8)return res.status(400).json({error:'INVALID_STAFF_LOGIN'});if(phone===process.env.OWNER_PHONE&&process.env.OWNER_ACCESS_CODE){const valid=crypto.timingSafeEqual(crypto.createHash('sha256').update(accessCode).digest(),crypto.createHash('sha256').update(process.env.OWNER_ACCESS_CODE).digest());if(!valid)return res.status(401).json({error:'INVALID_STAFF_LOGIN'});const owner=await pool.query(`INSERT INTO users(role,phone,full_name,is_phone_verified) VALUES('admin',$1,'مالك خالصة',true) ON CONFLICT(phone) DO UPDATE SET role='admin',is_phone_verified=true,updated_at=now() RETURNING id,role,phone,full_name`,[phone]);const user=owner.rows[0];return res.json({token:tokenFor(user),user:{id:user.id,role:user.role,phone:user.phone,fullName:user.full_name}});}const found=await pool.query(`SELECT u.id,u.role,u.phone,u.full_name,sc.password_hash FROM users u JOIN staff_credentials sc ON sc.user_id=u.id AND sc.is_active=true WHERE u.phone=$1 AND u.role IN ('admin','city_admin')`,[phone]);if(!found.rowCount)return res.status(401).json({error:'INVALID_STAFF_LOGIN'});const user=found.rows[0];const check=await pool.query('SELECT crypt($1,$2)=$2 AS valid',[accessCode,user.password_hash]);if(!check.rows[0].valid)return res.status(401).json({error:'INVALID_STAFF_LOGIN'});res.json({token:tokenFor(user),user:{id:user.id,role:user.role,phone:user.phone,fullName:user.full_name}});}));
 app.get('/v1/admin/me',auth('admin'),asyncRoute(async(req,res)=>res.json({ok:true,user:req.user})));
