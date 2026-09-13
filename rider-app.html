@@ -1,0 +1,23 @@
+# خالصة — النواة التشغيلية
+
+تشغّل هذه النسخة واجهات العميل والمحل والمندوب، مع خادم محلي موحّد للطلبات وحالاتها.
+
+## التشغيل
+
+من مجلد `wasla-egypt` شغّل:
+
+```powershell
+& "C:\Users\hnoki\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin\node.exe" server.mjs
+```
+
+ثم افتح `http://localhost:4173`.
+
+## واجهات النواة
+
+- `POST /api/orders` ينشئ طلباً بحالة `awaiting_merchant`.
+- `POST /api/orders/:id/merchant-accept` ينقل الطلب إلى `preparing`.
+- `POST /api/orders/:id/ready` يجعله متاحاً للمندوبين.
+- `POST /api/orders/:id/rider-accept` يعيّن المندوب.
+- `POST /api/orders/:id/pickup` ثم `POST /api/orders/:id/deliver` مع رمز OTP لإتمام التسليم.
+
+الخادم يمنع انتقالات الحالات غير الصحيحة، ويحتفظ بسجل زمني لكل تغيير في `data/orders.json`.

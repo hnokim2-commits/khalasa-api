@@ -1,0 +1,66 @@
+(function () {
+  const API = 'https://khalasa-api.onrender.com';
+  const tokenKey = 'khalasa_beta_token';
+  const userKey = 'khalasa_beta_user';
+  const state = { token: localStorage.getItem(tokenKey) || '', user: null, merchants: [] };
+  try { state.user = JSON.parse(localStorage.getItem(userKey) || 'null'); } catch (_) {}
+
+  const css = document.createElement('style');
+  css.textContent = `
+    .kh-beta-open{position:fixed;left:18px;bottom:82px;z-index:9998;border:0;border-radius:999px;background:#106b4b;color:#fff;padding:13px 18px;font:700 14px system-ui;box-shadow:0 10px 30px #063c2b44;cursor:pointer}
+    .kh-beta{position:fixed;inset:0;z-index:9999;background:#071d1688;display:none;align-items:flex-end;justify-content:center;font-family:system-ui;direction:rtl}
+    .kh-beta.show{display:flex}.kh-sheet{background:#fff;width:min(520px,100%);max-height:92vh;overflow:auto;border-radius:28px 28px 0 0;padding:22px;color:#10251d;box-shadow:0 -18px 50px #0003}
+    .kh-head{display:flex;align-items:center;justify-content:space-between;gap:12px}.kh-head h2{margin:0;font-size:22px}.kh-close{border:0;background:#eef4f1;border-radius:12px;padding:8px 12px;font-size:18px;cursor:pointer}
+    .kh-note{background:#effaf4;border:1px solid #cdebdc;border-radius:14px;padding:11px;margin:14px 0;font-size:13px;line-height:1.7}.kh-grid{display:grid;gap:10px}.kh-grid label{font-size:13px;font-weight:700}.kh-grid input,.kh-grid select,.kh-grid textarea{width:100%;box-sizing:border-box;border:1px solid #cfdcd6;border-radius:12px;padding:12px;background:#fff;font:inherit}.kh-grid textarea{min-height:76px;resize:vertical}
+    .kh-primary,.kh-secondary{border:0;border-radius:12px;padding:12px 16px;font-weight:800;cursor:pointer}.kh-primary{background:#11865c;color:#fff}.kh-secondary{background:#eef4f1;color:#164d39}.kh-danger{color:#a2382a}.kh-actions{display:flex;gap:8px;flex-wrap:wrap}.kh-status{min-height:22px;margin:8px 0;font-size:13px}.kh-order{border:1px solid #deebe5;border-radius:16px;padding:13px;margin-top:10px;background:#fbfdfc}.kh-order strong{display:block;margin-bottom:5px}.kh-muted{color:#6d7f78;font-size:12px}.kh-user{background:#fff4e9;border:1px solid #ffd9b8;border-radius:14px;padding:12px;margin:12px 0}
+  `;
+  document.head.appendChild(css);
+
+  document.body.insertAdjacentHTML('beforeend', `
+    <button class="kh-beta-open" id="khBetaOpen">جرّب طلباً حقيقياً</button>
+    <section class="kh-beta" id="khBeta"><div class="kh-sheet">
+      <div class="kh-head"><div><div class="kh-muted">التشغيل التجريبي — خالصة</div><h2>طلب حقيقي مع الأصدقاء</h2></div><button class="kh-close" id="khBetaClose">×</button></div>
+      <div id="khAccount"></div><div class="kh-status" id="khStatus"></div>
+      <div id="khAuth">
+        <div class="kh-note">يلزم التسجيل قبل الطلب. سنرسل رمز تحقق صالحاً لمدة 5 دقائق إلى بريدك الإلكتروني.</div>
+        <div class="kh-grid"><label>الاسم الكامل<input id="khName" autocomplete="name"></label><label>رقم الهاتف<input id="khPhone" inputmode="tel" placeholder="01xxxxxxxxx"></label><label>البريد الإلكتروني<input id="khEmail" type="email" autocomplete="email" placeholder="name@example.com"></label><div class="kh-actions"><button class="kh-primary" id="khRequest">إرسال رمز التحقق بالبريد</button></div><label>رمز التحقق<input id="khOtp" inputmode="numeric" maxlength="6" placeholder="000000"></label><button class="kh-primary" id="khVerify">تأكيد التسجيل</button></div>
+      </div>
+      <div id="khOrderBox" hidden>
+        <div class="kh-note">لن يُرسل الطلب إلا بعد التسجيل. سيظهر فوراً في لوحة المحل التجريبية.</div>
+        <div class="kh-grid"><label>المحل<select id="khMerchant"></select></label><label>تفاصيل الطلب<textarea id="khItems" placeholder="مثال: 2 كيلو طماطم + كيلو بطاطس"></textarea></label><label>الكمية التقريبية<input id="khQty" type="number" min="1" value="1"></label><label>قيمة الطلب المتوقعة (ج.م)<input id="khAmount" type="number" min="0" value="100"></label><label>عنوان التسليم<textarea id="khAddress" placeholder="المدينة، الشارع، علامة مميزة"></textarea></label><button class="kh-primary" id="khCreateOrder">تأكيد وإرسال الطلب</button></div>
+        <h3>طلباتي</h3><div id="khOrders"></div>
+      </div>
+    </div></section>`);
+
+  const $ = (id) => document.getElementById(id);
+  const status = (message, bad = false) => { $('khStatus').textContent = message; $('khStatus').className = `kh-status${bad ? ' kh-danger' : ''}`; };
+  async function request(path, options = {}) {
+    const headers = { 'content-type': 'application/json', ...(options.headers || {}) };
+    if (state.token) headers.authorization = `Bearer ${state.token}`;
+    const response = await fetch(API + path, { ...options, headers });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(body.message || body.error || 'تعذر تنفيذ العملية');
+    return body;
+  }
+  const labels = { pending:'جديد', accepted:'مقبول', preparing:'قيد التجهيز', ready:'جاهز', picked_up:'استلمه المندوب', delivered:'تم التسليم', cancelled:'ملغي' };
+  function renderAccount() {
+    const logged = Boolean(state.token && state.user);
+    $('khAuth').hidden = logged; $('khOrderBox').hidden = !logged;
+    $('khAccount').innerHTML = logged ? `<div class="kh-user"><b>مرحباً ${state.user.fullName || ''}</b><div class="kh-muted">${state.user.phone || ''}</div><button class="kh-secondary" id="khLogout">تسجيل الخروج</button></div>` : '';
+    if (logged) $('khLogout').onclick = () => { localStorage.removeItem(tokenKey); localStorage.removeItem(userKey); state.token=''; state.user=null; renderAccount(); };
+  }
+  async function loadMerchants() {
+    const data = await request('/v1/merchants'); state.merchants = data.merchants || data || [];
+    $('khMerchant').innerHTML = state.merchants.map(m => `<option value="${m.id}">${m.display_name || m.displayName || 'محل'}</option>`).join('') || '<option value="">لا توجد محلات متاحة</option>';
+  }
+  async function loadOrders() {
+    if (!state.token) return;
+    try { const data = await request('/v1/orders/mine'); const orders = data.orders || data || []; $('khOrders').innerHTML = orders.map(o => `<div class="kh-order"><strong>${labels[o.status] || o.status}</strong><div>${o.items_text || o.itemsText || ''}</div><div class="kh-muted">${Number(o.amount || 0).toFixed(2)} ج.م — ${new Date(o.created_at || Date.now()).toLocaleString('ar-EG')}</div></div>`).join('') || '<div class="kh-muted">لا توجد طلبات بعد.</div>'; } catch (e) { status(e.message, true); }
+  }
+  $('khBetaOpen').onclick = async () => { $('khBeta').classList.add('show'); renderAccount(); if (state.token) { try { await loadMerchants(); await loadOrders(); } catch(e) { status(e.message, true); } } };
+  $('khBetaClose').onclick = () => $('khBeta').classList.remove('show');
+  $('khRequest').onclick = async () => { try { status('جارٍ إرسال الرمز…'); await request('/v1/auth/request-otp',{method:'POST',body:JSON.stringify({phone:$('khPhone').value.trim(),email:$('khEmail').value.trim()})}); status('تم إرسال الرمز إلى بريدك الإلكتروني.'); } catch(e) { status(e.message,true); } };
+  $('khVerify').onclick = async () => { try { status('جارٍ تأكيد التسجيل…'); const data = await request('/v1/auth/verify-otp',{method:'POST',body:JSON.stringify({phone:$('khPhone').value.trim(),fullName:$('khName').value.trim(),otp:$('khOtp').value.trim()})}); state.token=data.token; state.user=data.user; localStorage.setItem(tokenKey,state.token); localStorage.setItem(userKey,JSON.stringify(state.user)); renderAccount(); await loadMerchants(); await loadOrders(); status('تم التسجيل بنجاح. يمكنك إنشاء الطلب الآن.'); } catch(e) { status(e.message,true); } };
+  $('khCreateOrder').onclick = async () => { try { if (!state.token) throw new Error('سجّل أولاً'); if (!$('khMerchant').value) throw new Error('لا يوجد محل متاح'); status('جارٍ إرسال الطلب…'); await request('/v1/orders',{method:'POST',body:JSON.stringify({merchantId:$('khMerchant').value,itemsText:$('khItems').value,quantity:Number($('khQty').value),amount:Number($('khAmount').value),deliveryAddress:$('khAddress').value})}); $('khItems').value=''; status('تم إنشاء الطلب وإرساله إلى المحل.'); await loadOrders(); } catch(e) { status(e.message,true); } };
+  renderAccount();
+})();

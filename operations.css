@@ -1,0 +1,131 @@
+const apiBase = location.protocol === 'file:' ? 'http://localhost:4173/api' : `${location.origin}/api`;
+const fmt = value => `${Number(value || 0).toLocaleString('ar-EG')} ج.م`;
+const statusLabel = status => ({ awaiting_merchant: 'طلب جديد', preparing: 'قيد التجهيز' }[status] || status);
+
+function toast(message) {
+  const target = document.getElementById('toast');
+  target.textContent = message;
+  target.classList.add('show');
+  clearTimeout(window.merchantToast);
+  window.merchantToast = setTimeout(() => target.classList.remove('show'), 2800);
+}
+
+function selectPage(name, button) {
+  document.querySelectorAll('.page').forEach(page => page.classList.toggle('active', page.id === `page-${name}`));
+  document.querySelectorAll('[data-page]').forEach(item => item.classList.toggle('active', item === button));
+  if (name === 'reports') syncSettlement();
+}
+
+function setStoreAvailability() {
+  const button = document.getElementById('availability');
+  const open = button.dataset.open !== 'false';
+  button.dataset.open = String(!open);
+  button.textContent = !open ? '● متاح لاستقبال الطلبات' : '● متوقف مؤقتاً';
+  button.classList.toggle('closed', open);
+  toast(!open ? 'المحل متاح الآن لاستقبال الطلبات' : 'تم إيقاف استقبال الطلبات مؤقتاً');
+}
+
+function renderOrders(orders) {
+  const list = document.getElementById('orderList');
+  if (!orders.length) {
+    list.innerHTML = '<div class="empty-panel"><div>🎉</div><h2>لا توجد طلبات تحتاج إجراء</h2><p>ستظهر الطلبات الجديدة هنا فور وصولها من تطبيق العميل.</p></div>';
+    return;
+  }
+  list.innerHTML = orders.map(order => {
+    const items = order.items.map(item => `${item.qty} × ${item.name}`).join(' · ');
+    const action = order.status === 'awaiting_merchant'
+      ? `<button class="accept" onclick="openPrep('${order.id}')">قبول وتحديد التجهيز</button><button class="reject" onclick="cancelOrder('${order.id}')">رفض</button>`
+      : `<button class="accept" onclick="readyCentralOrder('${order.id}')">الطلب جاهز للمندوب</button>`;
+    return `<article class="order"><div><h3>${order.id} · ${order.customer.name}</h3><p>${items}</p><small class="order-meta">${order.customer.address} · الدفع: ${order.payment === 'cod' ? 'عند الاستلام' : order.payment === 'wallet' ? 'محفظة ذكية' : 'بطاقة'}</small></div><div><span class="amount">${fmt(order.total)}</span><p>${statusLabel(order.status)}</p></div><div class="order-actions">${action}</div></article>`;
+  }).join('');
+}
+
+async function syncMerchantOrders() {
+  try {
+    const response = await fetch(`${apiBase}/merchant/orders`);
+    const data = await response.json();
+    const orders = data.orders || [];
+    renderOrders(orders);
+    document.getElementById('newOrderCount').textContent = orders.filter(order => order.status === 'awaiting_merchant').length;
+    document.getElementById('preparingCount').textContent = orders.filter(order => order.status === 'preparing').length;
+  } catch {
+    toast('تعذر الاتصال بالخادم المحلي. ستبقى البيانات التجريبية ظاهرة.');
+  }
+}
+
+function openPrep(id) {
+  document.getElementById('orderId').value = id;
+  document.getElementById('prepModal').classList.add('show');
+}
+function closePrep() { document.getElementById('prepModal').classList.remove('show'); }
+async function confirmPrep(event) {
+  event.preventDefault();
+  const id = document.getElementById('orderId').value;
+  const prepMinutes = Number(document.getElementById('prepMinutes').value);
+  const response = await fetch(`${apiBase}/orders/${id}/merchant-accept`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ prepMinutes }) });
+  if (response.ok) { closePrep(); toast(`تم قبول الطلب. وقت التجهيز ${prepMinutes} دقيقة`); syncMerchantOrders(); }
+  else toast('تعذر تحديث الطلب، حاول مرة أخرى.');
+}
+async function readyCentralOrder(id) {
+  const response = await fetch(`${apiBase}/orders/${id}/ready`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+  if (response.ok) { toast('تم إرسال الطلب تلقائياً للمندوبين القريبين'); syncMerchantOrders(); }
+  else toast('تعذر تحديث الطلب، حاول مرة أخرى.');
+}
+async function cancelOrder(id) {
+  if (!confirm('هل تريد رفض هذا الطلب؟')) return;
+  const response = await fetch(`${apiBase}/orders/${id}/cancel`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ actor: 'merchant', reason: 'رفض المحل للطلب' }) });
+  if (response.ok) { toast('تم رفض الطلب وإبلاغ العميل'); syncMerchantOrders(); }
+}
+
+async function syncSettlement() {
+  try {
+    const response = await fetch(`${apiBase}/merchant/settlement`);
+    const data = await response.json();
+    const orders = data.orders || [];
+    const total = orders.reduce((sum, order) => sum + Number(order.payout || 0), 0);
+    document.getElementById('settlementTotal').textContent = fmt(total);
+    document.getElementById('settlementList').innerHTML = orders.length
+      ? orders.map(order => `<li><span>${order.id}</span><b>${fmt(order.payout)}</b><small>${order.status === 'cash_reconciliation_due' ? 'تسوية نقدية مطلوبة' : 'جاهز للتحويل'}</small></li>`).join('')
+      : '<li class="settlement-empty">لا توجد مستحقات مكتملة بعد.</li>';
+  } catch { document.getElementById('settlementList').innerHTML = '<li class="settlement-empty">شغّل الخادم المحلي لعرض التسويات الحية.</li>'; }
+}
+
+function saveBank(event) { event.preventDefault(); toast('تم حفظ بيانات التحويل بشكل تجريبي.'); }
+function saveCoverage() {
+  const areas = [...document.querySelectorAll('#areaList input:checked')].map(input => input.value);
+  const radius = document.getElementById('deliveryRadius').value;
+  if (!areas.length) { toast('اختر منطقة واحدة على الأقل قبل الحفظ.'); return; }
+  localStorage.setItem('khalasaMerchantCoverage', JSON.stringify({ areas, radius }));
+  toast(`تم حفظ نطاق البيع: ${areas.length} مناطق حتى ${radius} كم`);
+}
+function startIntegration(type) {
+  const messages = {
+    pos: 'سنجمع اسم نظام الكاشير وإصدار النظام لبدء الربط الفني.',
+    meta: 'عند الإطلاق سيتم تحويلك إلى صفحة Meta الرسمية لمنح الصلاحيات بأمان.',
+    api: 'تم تسجيل طلب الربط التقني. سيظهر لك مفتاح API بعد اعتماد فريق خالصة.'
+  };
+  toast(messages[type]);
+}
+function loadCoverage() {
+  try {
+    const saved = JSON.parse(localStorage.getItem('khalasaMerchantCoverage'));
+    if (!saved) return;
+    document.getElementById('deliveryRadius').value = saved.radius;
+    document.querySelectorAll('#areaList input').forEach(input => input.checked = saved.areas.includes(input.value));
+  } catch {}
+}
+function openMerchantOnboarding() { document.getElementById('merchantModal').classList.add('show'); merchantStep(1); }
+function closeMerchantOnboarding() { document.getElementById('merchantModal').classList.remove('show'); }
+function merchantStep(step) {
+  ['businessForm', 'documentsForm', 'reviewForm'].forEach((id, index) => document.getElementById(id).classList.toggle('merchant-hidden', index !== step - 1));
+  document.querySelectorAll('.verify-steps i').forEach((item, index) => item.classList.toggle('active', index === step - 1));
+  document.getElementById('merchantTitle').textContent = ['بيانات المحل', 'المستندات المعتمدة', 'مراجعة وإرسال'][step - 1];
+}
+function merchantNext(event, step) { event.preventDefault(); merchantStep(step); }
+function merchantBack(step) { merchantStep(step); }
+function markDocument(input) { if (input.files?.[0]) input.closest('.document-upload').classList.add('done'); }
+function submitMerchantVerification(event) { event.preventDefault(); closeMerchantOnboarding(); document.getElementById('verifyStatus').textContent = '● طلب التوثيق قيد المراجعة'; toast('تم إرسال مستندات المحل للمراجعة بنجاح'); }
+
+syncMerchantOrders();
+loadCoverage();
+setInterval(syncMerchantOrders, 8000);

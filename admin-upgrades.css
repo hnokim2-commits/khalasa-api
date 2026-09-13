@@ -1,0 +1,24 @@
+(function(){
+  const base=window.KHALASA_API_BASE_URL||location.origin;
+  async function refreshAdminOverview(){
+    const token=localStorage.getItem('khalasaStaffToken');if(!token)return;
+    try{
+      const headers={Authorization:`Bearer ${token}`},[response,requestsResponse]=await Promise.all([fetch(`${base}/v1/admin/overview`,{headers}),fetch(`${base}/v1/admin/partner-requests`,{headers})]);if(!response.ok)return;
+      const data=(await response.json()).overview||{},cards=document.querySelectorAll('#admin-overview .metric-grid article'),metrics=document.querySelectorAll('#admin-overview .metric-grid article b'),flow=document.querySelectorAll('#admin-overview .flow b');
+      if(metrics[0])metrics[0].textContent=Number(data.orders_today||0).toLocaleString('ar-EG');
+      if(metrics[1])metrics[1].textContent=Number(data.active_orders||0).toLocaleString('ar-EG');
+      if(metrics[2])metrics[2].textContent=Number(data.active_merchants||0).toLocaleString('ar-EG');
+      if(metrics[3])metrics[3].textContent=`${Number(data.commission_today||0).toLocaleString('ar-EG')} ج.م`;
+      const notes=['منذ بداية اليوم','قيد المعالجة الآن','محلات معتمدة وتستقبل الطلبات','من الطلبات المكتملة اليوم'];cards.forEach((card,index)=>{const note=card.querySelector('small');if(note)note.textContent=notes[index]||''});
+      if(flow[0])flow[0].textContent=Number(data.awaiting_merchant||0);
+      if(flow[1])flow[1].textContent=Number(data.preparing||0);
+      if(flow[2])flow[2].textContent=Number(data.awaiting_rider||0);
+      if(flow[3])flow[3].textContent=Number(data.on_the_way||0);
+      const live=document.getElementById('liveCount');if(live)live.textContent=Number(data.active_orders||0);
+      const approvals=document.querySelector('[data-admin-page="approvals"] b');if(approvals)approvals.textContent=Number(data.pending_approvals||0);
+      const review=document.querySelector('#admin-overview .review-mini');if(review&&requestsResponse.ok){const requests=((await requestsResponse.json()).requests||[]).filter(item=>item.status==='pending');review.replaceChildren();for(const item of requests.slice(0,5)){const row=document.createElement('li'),icon=document.createElement('span'),info=document.createElement('div'),name=document.createElement('b'),details=document.createElement('small'),kind=document.createElement('em');icon.textContent=item.partner_type==='rider'?'🛵':'🏪';name.textContent=item.full_name;details.textContent=`طلب اعتماد · ${item.city_name||''}`;kind.textContent=item.partner_type==='rider'?'مندوب':'محل';info.append(name,details);row.append(icon,info,kind);review.append(row)}if(!requests.length){const empty=document.createElement('li');empty.className='all-read';empty.textContent='لا توجد طلبات اعتماد تحتاج مراجعة.';review.append(empty)}}
+    }catch(_){}
+  }
+  window.refreshAdminOverview=refreshAdminOverview;
+  setTimeout(refreshAdminOverview,500);setInterval(refreshAdminOverview,15000);
+})();

@@ -1,0 +1,41 @@
+(function () {
+  "use strict";
+
+  var API_BASE_URL = "https://khalasa-api.onrender.com";
+  var originalFetch = window.fetch.bind(window);
+
+  window.KHALASA_CONFIG = Object.freeze({
+    apiBaseUrl: API_BASE_URL,
+    webBaseUrl: window.location.origin,
+  });
+  window.KHALASA_API_BASE_URL = API_BASE_URL;
+
+  function resolveApiUrl(value) {
+    var url = String(value || "");
+
+    if (/^\/(?:api|v1)(?:\/|$)/i.test(url)) {
+      return API_BASE_URL + url;
+    }
+
+    if (/^https?:\/\/(?:localhost|127\.0\.0\.1)(?::\d+)?\/(?:api|v1)(?:\/|$)/i.test(url)) {
+      return url.replace(/^https?:\/\/(?:localhost|127\.0\.0\.1)(?::\d+)?/i, API_BASE_URL);
+    }
+
+    return url;
+  }
+
+  window.fetch = function (input, init) {
+    if (typeof input === "string" || input instanceof URL) {
+      return originalFetch(resolveApiUrl(input), init);
+    }
+
+    if (input instanceof Request) {
+      var resolvedUrl = resolveApiUrl(input.url);
+      if (resolvedUrl !== input.url) {
+        return originalFetch(new Request(resolvedUrl, input), init);
+      }
+    }
+
+    return originalFetch(input, init);
+  };
+})();

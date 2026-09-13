@@ -1,0 +1,74 @@
+// Customer identity is confirmed by the email OTP flow; no ID-card image is collected.
+window.showAuthStep = function (step, title) {
+  const element = document.getElementById('phoneStep');
+  if (element) element.classList.remove('auth-hidden');
+  document.getElementById('authTitle').textContent = title;
+};
+
+window.sendOtp = async function (event) {
+  event.preventDefault();
+  const deliveryStatus = document.getElementById('authDeliveryStatus');
+  const sendButton = document.getElementById('sendOtpButton');
+  const phone = document.getElementById('phoneInput').value;
+  const email = document.getElementById('emailInput').value.trim();
+  const governorate = document.getElementById('signupGovernorateSelect');
+  const city = document.getElementById('signupCitySelect');
+  if (!/^01\d{9}$/.test(phone)) {
+    toast('أدخل رقم هاتف مصري صحيح من 11 رقماً');
+    return;
+  }
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    toast('أدخل بريداً إلكترونياً صحيحاً');
+    return;
+  }
+  if (!governorate || !city || !governorate.value || !city.value) {
+    toast('اختر المحافظة والمدينة أولاً');
+    return;
+  }
+  try {
+    sendButton.disabled = true;
+    deliveryStatus.textContent = 'جارٍ إرسال رمز التحقق…';
+    deliveryStatus.className = 'auth-delivery-status';
+    await window.KhalasaApi.request('/auth/request-otp', { method:'POST', body:JSON.stringify({ phone, email }) });
+    if (typeof window.setSignupCustomerLocation === 'function') window.setSignupCustomerLocation();
+    deliveryStatus.textContent = 'تم إرسال الرمز. افحص صندوق الوارد والرسائل غير المرغوب فيها.';
+    deliveryStatus.className = 'auth-delivery-status success';
+    document.getElementById('otpInput').focus();
+  } catch (error) {
+    const messages={OTP_PROVIDER_NOT_CONFIGURED:'خدمة البريد غير مفعلة على الخادم.',OTP_DELIVERY_FAILED:'تعذر إرسال الرسالة من مزود البريد.',TOO_MANY_ATTEMPTS:'محاولات كثيرة. انتظر عدة دقائق ثم حاول مجدداً.',INVALID_EMAIL:'البريد الإلكتروني غير صحيح.',API_REQUEST_FAILED:'تعذر الاتصال بالخادم.'};
+    deliveryStatus.textContent=messages[error.message]||'تعذر إرسال رمز التحقق. حاول لاحقاً.';
+    deliveryStatus.className = 'auth-delivery-status error';
+  } finally {
+    sendButton.disabled = false;
+  }
+};
+
+window.backToPhone = function () {
+  showAuthStep('phoneStep', 'أنشئ حسابك');
+};
+
+window.verifyOtp = async function (event) {
+  event.preventDefault();
+  const fullName=document.getElementById('nameInput').value.trim(),phone=document.getElementById('phoneInput').value.trim(),email=document.getElementById('emailInput').value.trim().toLowerCase(),otp=document.getElementById('otpInput').value.trim();
+  if(!/^\d{6}$/.test(otp)){toast('أدخل رمز التحقق المكوّن من 6 أرقام');return;}
+  try {
+    const result=await window.KhalasaApi.request('/auth/verify-otp',{method:'POST',body:JSON.stringify({fullName,phone,email,otp})});
+    window.KhalasaApi.saveSession(result);
+    if (typeof window.setSignupCustomerLocation === 'function') window.setSignupCustomerLocation();
+    const customer={name:result.user.full_name,phone:result.user.phone,email:result.user.email,location:typeof window.getCustomerLocation==='function'?window.getCustomerLocation():null};
+    localStorage.setItem('waslaCustomer',JSON.stringify(customer));
+    document.getElementById('profileName').textContent=customer.name;document.getElementById('profileHint').textContent='حساب موثّق ✓';closeAuth();toast('تم إنشاء حسابك بنجاح');
+  } catch (error) {
+    const messages={EMAIL_ALREADY_IN_USE:'هذا البريد مرتبط بحساب آخر.',PHONE_ALREADY_IN_USE:'رقم الهاتف مرتبط بحساب آخر.',OTP_INVALID_OR_EXPIRED:'رمز التحقق غير صحيح أو انتهت صلاحيته.'};
+    toast(messages[error.message]||'تعذر تأكيد الحساب. حاول مرة أخرى.');
+  }
+};
+
+document.addEventListener('DOMContentLoaded', () => {
+  document.querySelectorAll('.payment-option[data-pay="wallet"],.payment-option[data-pay="card"]').forEach(button => {
+    button.disabled = true;
+    button.setAttribute('aria-disabled','true');
+    button.title = 'ستتوفر قريباً بعد ربط بوابة دفع معتمدة';
+    const small=button.querySelector('small'); if(small) small.textContent='غير متاح حالياً';
+  });
+});

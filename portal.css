@@ -1,0 +1,66 @@
+(function () {
+  const approvals = document.getElementById('admin-approvals');
+  if (!approvals || document.getElementById('partnerCredentialForm')) return;
+
+  approvals.insertAdjacentHTML('afterbegin', `
+    <form id="partnerCredentialForm" class="panel" style="margin-bottom:16px;padding:24px">
+      <div class="panel-head">
+        <div>
+          <h2>إنشاء رمز دخول شريك</h2>
+          <p>أنشئ رمزًا للمحل أو المندوب المعتمد، ثم سلّمه لصاحب الحساب مباشرة.</p>
+        </div>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:14px;margin:20px 0">
+        <label style="display:grid;gap:8px;font-weight:700">نوع الحساب
+          <select id="partnerCredentialRole" style="width:100%;padding:13px;border:1px solid #cadbd4;border-radius:10px;background:#fff">
+            <option value="merchant">محل</option>
+            <option value="rider">مندوب</option>
+          </select>
+        </label>
+        <label style="display:grid;gap:8px;font-weight:700">رقم الهاتف
+          <input id="partnerCredentialPhone" inputmode="numeric" pattern="01[0-9]{9}" placeholder="01xxxxxxxxx" style="width:100%;padding:13px;border:1px solid #cadbd4;border-radius:10px" required>
+        </label>
+        <label style="display:grid;gap:8px;font-weight:700">رمز دخول قوي
+          <input id="partnerCredentialCode" type="password" minlength="10" autocomplete="new-password" placeholder="10 أحرف على الأقل" style="width:100%;padding:13px;border:1px solid #cadbd4;border-radius:10px" required>
+        </label>
+      </div>
+      <button class="primary" type="submit">حفظ رمز الدخول</button>
+      <p id="partnerCredentialStatus" style="margin-top:12px" aria-live="polite"></p>
+    </form>
+  `);
+
+  document.getElementById('partnerCredentialForm').addEventListener('submit', async function (event) {
+    event.preventDefault();
+    const status = document.getElementById('partnerCredentialStatus');
+    const token = localStorage.getItem('khalasaStaffToken') || '';
+    const api = window.KHALASA_API_BASE_URL || location.origin;
+    status.textContent = 'جارٍ الحفظ…';
+
+    try {
+      const response = await fetch(`${api}/v1/admin/partner-credentials`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          role: document.getElementById('partnerCredentialRole').value,
+          phone: document.getElementById('partnerCredentialPhone').value.trim(),
+          accessCode: document.getElementById('partnerCredentialCode').value
+        })
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        status.textContent = body.error === 'PARTNER_ACCOUNT_NOT_FOUND'
+          ? 'لا يوجد حساب شريك مطابق لهذا الرقم والنوع.'
+          : 'تعذر حفظ الرمز. تحقق من البيانات والصلاحية.';
+        return;
+      }
+      this.reset();
+      status.textContent = 'تم حفظ رمز دخول الشريك بنجاح.';
+      if (typeof window.toast === 'function') window.toast('تم حفظ رمز دخول الشريك بأمان');
+    } catch (_) {
+      status.textContent = 'تعذر الاتصال بالخادم. حاول مرة أخرى.';
+    }
+  });
+})();

@@ -1,0 +1,214 @@
+(function () {
+  if (window.__KHALASA_RESILIENCE__) return;
+  window.__KHALASA_RESILIENCE__ = true;
+  "use strict";
+
+  if (window.__khalasaResilienceLoaded) return;
+  window.__khalasaResilienceLoaded = true;
+
+  const nativeFetch = window.fetch.bind(window);
+  const QUEUE_KEY = "khalasa_pending_requests_v1";
+  const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
+  const RETRYABLE_STATUS = new Set([502, 503, 504]);
+  const NON_QUEUEABLE = /(?:auth|login|logout|otp|verify|password|payment|checkout|upload|document|file)/i;
+  let flushing = false;
+
+  function sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  function readQueue() {
+    try {
+      const value = JSON.parse(localStorage.getItem(QUEUE_KEY) || "[]");
+      return Array.isArray(value) ? value : [];
+    } catch (_) {
+      return [];
+    }
+  }
+
+  function writeQueue(queue) {
+    localStorage.setItem(QUEUE_KEY, JSON.stringify(queue.slice(-100)));
+    updateBadge(queue.length);
+  }
+
+  function ensureBanner() {
+    let banner = document.getElementById("khalasa-network-banner");
+    if (banner) return banner;
+    banner = document.createElement("div");
+    banner.id = "khalasa-network-banner";
+    banner.setAttribute("role", "status");
+    banner.setAttribute("aria-live", "polite");
+    Object.assign(banner.style, {
+      position: "fixed",
+      left: "12px",
+      right: "12px",
+      bottom: "14px",
+      zIndex: "2147483647",
+      maxWidth: "560px",
+      margin: "auto",
+      padding: "12px 16px",
+      borderRadius: "14px",
+      background: "#123f32",
+      color: "#fff",
+      boxShadow: "0 10px 35px rgba(0,0,0,.22)",
+      font: "600 14px/1.6 system-ui, sans-serif",
+      direction: "rtl",
+      textAlign: "right",
+      display: "none"
+    });
+    document.body.appendChild(banner);
+    return banner;
+  }
+
+  let bannerTimer;
+  function notify(message, persistent) {
+    if (!document.body) return;
+    const banner = ensureBanner();
+    banner.textContent = message;
+    banner.style.display = "block";
+    clearTimeout(bannerTimer);
+    if (!persistent) {
+      bannerTimer = setTimeout(() => {
+        banner.style.display = "none";
+      }, 5500);
+    }
+  }
+
+  function updateBadge(count) {
+    if (!document.body) return;
+    if (!navigator.onLine) {
+      notify("لا يوجد اتصال بالإنترنت. يمكنك متابعة التصفح، وستُرسل الطلبات المحفوظة عند عودة الشبكة.", true);
+      return;
+    }
+    if (count > 0) {
+      notify(`يوجد ${count} إجراء محفوظ بانتظار الإرسال الآمن.`, true);
+      return;
+    }
+    const banner = document.getElementById("khalasa-network-banner");
+    if (banner) banner.style.display = "none";
+  }
+
+  function normalizeRequest(input, init) {
+    const url = typeof input === "string" ? input : input.url;
+    const method = String((init && init.method) || (input && input.method) || "GET").toUpperCase();
+    return { url, method };
+  }
+
+  function headersToObject(headers) {
+    const result = {};
+    new Headers(headers || {}).forEach((value, key) => {
+      if (!/^(cookie|host|content-length)$/i.test(key)) result[key] = value;
+    });
+    return result;
+  }
+
+  function makeIdempotencyKey() {
+    if (crypto && crypto.randomUUID) return crypto.randomUUID();
+    return `kh-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  }
+
+  async function serialize(input, init, url, method) {
+    const headers = headersToObject((init && init.headers) || (input && input.headers));
+    headers["x-idempotency-key"] = headers["x-idempotency-key"] || makeIdempotencyKey();
+    let body = init && init.body;
+    if (body == null && input instanceof Request) {
+      body = await input.clone().text();
+    }
+    if (body instanceof FormData || body instanceof Blob || body instanceof ArrayBuffer || body instanceof URLSearchParams) {
+      return null;
+    }
+    if (body != null && typeof body !== "string") return null;
+    return { id: headers["x-idempotency-key"], url, method, headers, body: body || null, createdAt: Date.now(), attempts: 0 };
+  }
+
+  async function queueRequest(input, init, url, method) {
+    if (NON_QUEUEABLE.test(url)) return null;
+    const item = await serialize(input, init || {}, url, method);
+    if (!item) return null;
+    const queue = readQueue();
+    if (!queue.some((entry) => entry.id === item.id)) queue.push(item);
+    writeQueue(queue);
+    notify("تعذر الوصول للخادم مؤقتاً. تم حفظ العملية بأمان وستُرسل تلقائياً عند عودة الخدمة.", true);
+    return new Response(JSON.stringify({ ok: true, queued: true, pendingId: item.id, message: "تم حفظ العملية مؤقتاً" }), {
+      status: 202,
+      headers: { "Content-Type": "application/json; charset=utf-8", "X-Khalasa-Queued": "1" }
+    });
+  }
+
+  async function resilientFetch(input, init) {
+    const { url, method } = normalizeRequest(input, init);
+    const safe = SAFE_METHODS.has(method);
+    const maxAttempts = safe ? 3 : 1;
+    let lastError;
+
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+      try {
+        const response = await nativeFetch(input, init);
+        if (!RETRYABLE_STATUS.has(response.status)) return response;
+        lastError = new Error(`HTTP ${response.status}`);
+        if (!safe) {
+          const queued = await queueRequest(input, init, url, method);
+          return queued || response;
+        }
+      } catch (error) {
+        lastError = error;
+        if (!safe) {
+          const queued = await queueRequest(input, init, url, method);
+          if (queued) return queued;
+          notify("تعذر تنفيذ العملية الآن. لم يتم إرسال أي بيانات، حاول مرة أخرى بعد عودة الاتصال.", false);
+          throw error;
+        }
+      }
+      if (attempt < maxAttempts - 1) await sleep(500 * Math.pow(2, attempt));
+    }
+    notify("الخدمة مشغولة مؤقتاً. أعد المحاولة بعد لحظات.", false);
+    throw lastError || new Error("SERVICE_UNAVAILABLE");
+  }
+
+  async function flushQueue() {
+    if (flushing || !navigator.onLine) return;
+    flushing = true;
+    const queue = readQueue();
+    const remaining = [];
+    for (const item of queue) {
+      try {
+        const response = await nativeFetch(item.url, {
+          method: item.method,
+          headers: item.headers,
+          body: item.body,
+          credentials: "include"
+        });
+        if (!response.ok && RETRYABLE_STATUS.has(response.status)) {
+          item.attempts += 1;
+          remaining.push(item);
+        } else if (!response.ok) {
+          console.warn("Khalasa queued request rejected", item.id, response.status);
+        }
+      } catch (_) {
+        item.attempts += 1;
+        remaining.push(item);
+      }
+    }
+    writeQueue(remaining);
+    flushing = false;
+    if (queue.length && !remaining.length) notify("تم إرسال العمليات المحفوظة بنجاح.", false);
+  }
+
+  window.fetch = resilientFetch;
+  window.KhalasaResilience = { flush: flushQueue, pending: () => readQueue().length };
+
+  window.addEventListener("online", () => {
+    notify("عاد الاتصال. جارٍ مزامنة العمليات المحفوظة…", false);
+    flushQueue();
+  });
+  window.addEventListener("offline", () => updateBadge(readQueue().length));
+  window.addEventListener("DOMContentLoaded", () => {
+    updateBadge(readQueue().length);
+    flushQueue();
+  });
+  setInterval(flushQueue, 30000);
+
+  if ("serviceWorker" in navigator && location.protocol === "https:") {
+    window.addEventListener("load", () => navigator.serviceWorker.register("/service-worker.js").catch(console.warn));
+  }
+})();

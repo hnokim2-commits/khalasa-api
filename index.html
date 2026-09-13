@@ -1,0 +1,25 @@
+# النشر التلقائي لمنصة خالصة
+
+هذه الإعدادات تلغي الحاجة إلى رفع المجلد يدويًا في Cloudflare. كل تحديث يصل إلى الفرع `main` في GitHub يتم فحصه ثم نشره تلقائيًا إلى Worker باسم `khalasa-web`.
+
+## الإعداد لمرة واحدة
+
+1. أنشئ مستودع GitHub باسم `khalasa-web` وارفع محتويات هذا المجلد إليه.
+2. من Cloudflare افتح **My Profile > API Tokens > Create Token** واختر قالب **Edit Cloudflare Workers**.
+3. انسخ **Account ID** من صفحة حساب Cloudflare.
+4. في مستودع GitHub افتح **Settings > Secrets and variables > Actions**.
+5. أضف السرَّين التاليين:
+   - `CLOUDFLARE_API_TOKEN`
+   - `CLOUDFLARE_ACCOUNT_ID`
+6. افتح **Actions > Deploy Khalasa Web > Run workflow** لأول نشر.
+
+## الحماية المضافة
+
+- يفشل النشر إذا كانت إحدى صفحات العميل أو المحل أو المندوب أو الإدارة مفقودة.
+- يفشل النشر إذا ظهر الاسم الخاطئ «خلاصة» داخل ملفات الواجهة.
+- لا يعمل أكثر من نشر إنتاجي واحد في الوقت نفسه.
+- يحتفظ GitHub بسجل كل نسخة، ويمكن الرجوع إلى أي إصدار سابق.
+
+## رابط الإنتاج
+
+`https://khalasa-web.h-nokim2.workers.dev`

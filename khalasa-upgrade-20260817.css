@@ -1,0 +1,166 @@
+/* نطاقات تجريبية: في الإطلاق تُستبدل بحدود تغطية المحلات الفعلية. */
+const egyptLocations = {
+  'القاهرة':['القاهرة','حلوان','مدينة نصر','التجمع الخامس','الشروق'],
+  'الجيزة':['الجيزة','6 أكتوبر','الشيخ زايد','الهرم','العجوزة'],
+  'الإسكندرية':['الإسكندرية','برج العرب','العجمي','المنتزه'],
+  'الدقهلية':['المنصورة','ميت غمر','دكرنس','بلقاس'],
+  'البحر الأحمر':['الغردقة','رأس غارب','سفاجا','القصير','مرسى علم'],
+  'البحيرة':['دمنهور','كفر الدوار','رشيد','إدكو'],
+  'الفيوم':['الفيوم','سنورس','إطسا','طامية'],
+  'الغربية':['طنطا','المحلة الكبرى','كفر الزيات','زفتى'],
+  'الإسماعيلية':['الإسماعيلية','فايد','القنطرة شرق','التل الكبير'],
+  'المنوفية':['شبين الكوم','منوف','السادات','أشمون'],
+  'المنيا':['المنيا','ملوي','بني مزار','مغاغة'],
+  'القليوبية':['بنها','شبرا الخيمة','قليوب','العبور'],
+  'الوادي الجديد':['الخارجة','الداخلة','باريس'],
+  'السويس':['السويس','الأربعين','عتاقة'],
+  'أسوان':['أسوان','إدفو','كوم أمبو','دراو'],
+  'أسيوط':['أسيوط','ديروط','القوصية','منفلوط'],
+  'بني سويف':['بني سويف','الواسطى','ناصر','الفشن'],
+  'بورسعيد':['بورسعيد','بورفؤاد'],
+  'دمياط':['دمياط','رأس البر','كفر سعد','فارسكور'],
+  'الشرقية':['الزقازيق','كفر صقر','بلبيس','منيا القمح','أبو كبير','فاقوس','العاشر من رمضان'],
+  'جنوب سيناء':['الطور','شرم الشيخ','دهب','نويبع'],
+  'كفر الشيخ':['كفر الشيخ','دسوق','بلطيم','الحامول'],
+  'مطروح':['مرسى مطروح','الحمام','الضبعة','سيوة'],
+  'الأقصر':['الأقصر','إسنا','أرمنت','الطود'],
+  'قنا':['قنا','نجع حمادي','دشنا','قفط'],
+  'شمال سيناء':['العريش','بئر العبد','الشيخ زويد','رفح'],
+  'سوهاج':['سوهاج','أخميم','جرجا','طهطا']
+};
+
+const cityCoordinates = {
+  'القاهرة':[30.0444,31.2357], 'الجيزة':[30.0131,31.2089], '6 أكتوبر':[29.9285,30.9188],
+  'الإسكندرية':[31.2001,29.9187], 'المنصورة':[31.0409,31.3785], 'طنطا':[30.7865,31.0004],
+  'الزقازيق':[30.5877,31.5020], 'كفر صقر':[30.8014,31.6278], 'المحلة الكبرى':[30.9706,31.1669],
+  'بورسعيد':[31.2653,32.3019], 'دمياط':[31.4175,31.8144], 'السويس':[29.9668,32.5498],
+  'الإسماعيلية':[30.5965,32.2715], 'شرم الشيخ':[27.9158,34.3300], 'الأقصر':[25.6872,32.6396],
+  'أسوان':[24.0889,32.8998], 'سوهاج':[26.5569,31.6948], 'أسيوط':[27.1783,31.1859],
+  'المنيا':[28.1099,30.7503], 'بني سويف':[29.0661,31.0994], 'قنا':[26.1551,32.7160],
+  'الغردقة':[27.2574,33.8129], 'مرسى مطروح':[31.3543,27.2373], 'كفر الشيخ':[31.1107,30.9398],
+  'شبين الكوم':[30.5538,31.0124], 'دمنهور':[31.0341,30.4682], 'الفيوم':[29.3084,30.8428]
+};
+
+const khalasaCoverage = Object.fromEntries(Array.from({length:18}, (_, index) => [index + 1, ['وسط المدينة','منطقة السوق','منطقة المركز','الحي الغربي','الحي الشرقي']]));
+const khalasaMerchantLocations = {
+  1:['القاهرة','القاهرة'],2:['القاهرة','القاهرة'],3:['الجيزة','الجيزة'],4:['القاهرة','القاهرة'],
+  5:['الإسكندرية','الإسكندرية'],6:['القاهرة','القاهرة'],7:['القاهرة','القاهرة'],8:['الجيزة','6 أكتوبر'],
+  9:['الإسكندرية','الإسكندرية'],10:['القاهرة','القاهرة'],11:['الدقهلية','المنصورة'],12:['الغربية','طنطا'],
+  13:['الإسكندرية','الإسكندرية'],14:['بورسعيد','بورسعيد'],15:['القاهرة','القاهرة'],16:['الشرقية','الزقازيق'],
+  17:['الشرقية','الزقازيق'],18:['الغربية','المحلة الكبرى']
+};
+const khalasaSponsored = [
+  {restaurantId:1,headline:'خصم 15% على الوجبة',detail:'برجر ستريت · لفترة محدودة',badge:'عرض ممول'},
+  {restaurantId:11,headline:'توصيل مجاني اليوم',detail:'صيدلية العزبي · احتياجاتك اليومية',badge:'إعلان'},
+  {restaurantId:15,headline:'سلة البيت تبدأ من 220 ج.م',detail:'ماركت البلد · تسوق أسرع',badge:'إعلان'}
+];
+
+const defaultLocation = {governorate:'القاهرة', city:'القاهرة', area:'وسط المدينة', source:'default'};
+let khalasaLocation;
+try { khalasaLocation = {...defaultLocation, ...JSON.parse(localStorage.getItem('khalasaCustomerLocation') || '{}')}; } catch (_) { khalasaLocation = {...defaultLocation}; }
+
+function persistLocation(location) {
+  khalasaLocation = {...defaultLocation, ...location};
+  localStorage.setItem('khalasaCustomerLocation', JSON.stringify(khalasaLocation));
+  localStorage.setItem('khalasaCustomerArea', khalasaLocation.area || 'وسط المدينة');
+  const label = document.getElementById('areaName');
+  if (label) label.textContent = `${khalasaLocation.city}، ${khalasaLocation.governorate}`;
+}
+function cityOptions(governorate) {
+  return (egyptLocations[governorate] || []).map(city => `<option value="${city}">${city}</option>`).join('');
+}
+function setupSelects(prefix, location) {
+  const governorate = document.getElementById(`${prefix}GovernorateSelect`);
+  const city = document.getElementById(`${prefix}CitySelect`);
+  if (!governorate || !city) return;
+  governorate.innerHTML = Object.keys(egyptLocations).map(name => `<option value="${name}">${name}</option>`).join('');
+  governorate.value = egyptLocations[location.governorate] ? location.governorate : defaultLocation.governorate;
+  city.innerHTML = cityOptions(governorate.value);
+  city.value = egyptLocations[governorate.value].includes(location.city) ? location.city : egyptLocations[governorate.value][0];
+}
+window.updateCityOptions = function(context) {
+  const prefix = context === 'signup' ? 'signup' : 'area';
+  const governorate = document.getElementById(`${prefix}GovernorateSelect`);
+  const city = document.getElementById(`${prefix}CitySelect`);
+  if (!governorate || !city) return;
+  city.innerHTML = cityOptions(governorate.value);
+};
+window.getCustomerLocation = () => ({...khalasaLocation});
+window.setSignupCustomerLocation = function() {
+  const governorate = document.getElementById('signupGovernorateSelect');
+  const city = document.getElementById('signupCitySelect');
+  if (governorate && city) persistLocation({governorate:governorate.value, city:city.value, area:'وسط المدينة', source:'signup'});
+};
+window.confirmCustomerLocation = function() {
+  const governorate = document.getElementById('areaGovernorateSelect');
+  const city = document.getElementById('areaCitySelect');
+  if (!governorate || !city) return;
+  persistLocation({governorate:governorate.value, city:city.value, area:'وسط المدينة', source:'manual'});
+  setupSelects('signup', khalasaLocation);
+  closeArea(); renderNearbyRestaurants();
+  toast(`تظهر الآن المحلات التي تخدم ${khalasaLocation.city}`);
+};
+
+function servesCustomerLocation(restaurantId) {
+  const merchantLocation = khalasaMerchantLocations[restaurantId];
+  return merchantLocation && merchantLocation[0] === khalasaLocation.governorate && merchantLocation[1] === khalasaLocation.city;
+}
+function renderSponsored() {
+  const eligible = khalasaSponsored.filter(ad => servesCustomerLocation(ad.restaurantId));
+  const section = document.getElementById('sponsoredSection');
+  if (!section) return;
+  section.style.display = eligible.length ? 'block' : 'none';
+  document.getElementById('sponsoredGrid').innerHTML = eligible.map(ad => {
+    const store = restaurants.find(restaurant => restaurant.id === ad.restaurantId);
+    return `<article class="sponsored-card" onclick="addToCart(${store.id})"><div class="sponsored-art" style="--ad-bg:${store.bg}"><span>${ad.badge}</span>${store.emoji}</div><div><h3>${ad.headline}</h3><p>${ad.detail}</p><button onclick="event.stopPropagation();addToCart(${store.id})">اطلب الآن</button></div></article>`;
+  }).join('');
+}
+function renderNearbyRestaurants() {
+  const query = document.getElementById('searchInput').value.trim().toLowerCase();
+  const list = restaurants.filter(restaurant => {
+    const byCategory = currentCategory === 'all' || restaurant.category === currentCategory;
+    const byText = `${restaurant.name} ${restaurant.item}`.toLowerCase().includes(query);
+    return byCategory && byText && servesCustomerLocation(restaurant.id);
+  });
+  const grid = document.getElementById('restaurantGrid');
+  grid.innerHTML = list.map(restaurant => `<article class="restaurant-card" onclick="addToCart(${restaurant.id})"><div class="food-art" style="--art-bg:${restaurant.bg}">${restaurant.offer ? `<span class="offer-tag">${restaurant.offer}</span>` : ''}${restaurant.emoji}</div><div class="card-info"><div class="restaurant-title"><h3>${restaurant.name}</h3><span class="rating"><b>★</b> ${restaurant.rating}</span></div><p class="details">${restaurant.time} · ${restaurant.fee}</p><div class="card-bottom"><span>${restaurant.item}</span><button class="add-btn" aria-label="إضافة" onclick="event.stopPropagation();addToCart(${restaurant.id})">+</button></div></div></article>`).join('');
+  document.getElementById('emptyState').style.display = list.length ? 'none' : 'block';
+  const heading = document.querySelector('#restaurants .section-heading h2');
+  if (heading) heading.textContent = `محلات تخدم ${khalasaLocation.city}`;
+  renderSponsored();
+}
+window.filterRestaurants = renderNearbyRestaurants;
+window.setCategory = function(category, element) {
+  currentCategory = category;
+  document.querySelectorAll('.category').forEach(button => button.classList.remove('active'));
+  element.classList.add('active'); renderNearbyRestaurants();
+};
+window.showAll = function() { currentCategory = 'all'; document.querySelector('[data-category="all"]').click(); document.getElementById('restaurants').scrollIntoView({behavior:'smooth'}); };
+
+function closestCity(position) {
+  const {latitude, longitude} = position.coords;
+  let result = null;
+  Object.entries(cityCoordinates).forEach(([city, [lat, lng]]) => {
+    const score = Math.hypot((latitude - lat) * 111, (longitude - lng) * 95);
+    if (!result || score < result.distance) result = {city, distance:score};
+  });
+  if (!result || result.distance > 45) return null;
+  const governorate = Object.keys(egyptLocations).find(name => egyptLocations[name].includes(result.city));
+  return governorate ? {governorate, city:result.city, area:'وسط المدينة', source:'gps'} : null;
+}
+window.requestCustomerLocation = function() {
+  if (!navigator.geolocation) { toast('متصفحك لا يدعم تحديد الموقع. اختر المحافظة والمدينة يدوياً.'); return; }
+  toast('جارٍ تحديد مدينتك…');
+  navigator.geolocation.getCurrentPosition(position => {
+    const location = closestCity(position);
+    if (!location) { toast('لم نتمكن من تحديد المدينة بدقة. اخترها يدوياً.'); return; }
+    setupSelects('area', location);
+    persistLocation(location); setupSelects('signup', location);
+    closeArea(); renderNearbyRestaurants(); toast(`تم تحديد ${location.city}`);
+  }, () => toast('لم نتمكن من الوصول لموقعك. اختر المحافظة والمدينة يدوياً.'), {enableHighAccuracy:true, timeout:10000, maximumAge:300000});
+};
+
+persistLocation(khalasaLocation);
+setupSelects('area', khalasaLocation);
+setupSelects('signup', khalasaLocation);
+renderNearbyRestaurants();

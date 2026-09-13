@@ -1,0 +1,88 @@
+window.confirmPayment = async function () {
+  const customer = JSON.parse(localStorage.getItem('waslaCustomer') || 'null');
+  const session = window.KhalasaApi.session();
+  if (!customer || !session?.token) { openAuth(); return; }
+  if (!cart.length) { toast('السلة فارغة'); return; }
+  if (selectedPayment !== 'cod') { toast('الدفع الإلكتروني غير متاح حالياً. اختر الدفع عند الاستلام.'); return; }
+  if (cart.some(item => !item.apiProductId || !item.merchantId)) { toast('يوجد منتج تجريبي غير متاح للطلب حالياً. حدّث الصفحة واختر من المنتجات المتاحة.'); return; }
+  const merchantIds=[...new Set(cart.map(item=>item.merchantId))];
+  if(merchantIds.length!==1){toast('يجب أن تكون منتجات الطلب من محل واحد.');return;}
+  const submit = document.querySelector('#paymentModal .auth-submit');
+  submit.disabled = true; submit.textContent = 'جارٍ تأكيد الطلب…';
+  try {
+    const result = await window.KhalasaApi.request('/orders', {
+      method:'POST',
+      headers:{'x-idempotency-key':crypto.randomUUID().replace(/-/g,'_')},
+      body:JSON.stringify({
+        merchantId:merchantIds[0],
+        items:cart.map(item => ({ productId:item.apiProductId, qty:item.qty })),
+        deliveryAddress:document.getElementById('areaName').textContent || 'كفر صقر',
+        paymentMethod:selectedPayment
+      })
+    });
+    closePayment(); cart=[]; renderCart();
+    localStorage.setItem('waslaLastOrder', JSON.stringify({id:result.order.id,publicCode:result.order.public_code,deliveryOtp:result.order.deliveryOtp}));
+    toast(`تم إرسال طلبك إلى المحل برقم ${result.order.public_code}`);
+  } catch (error) {
+    toast(error.message === 'AUTH_REQUIRED' ? 'سجّل دخولك أولاً لإتمام الطلب' : 'تعذر إرسال الطلب إلى النظام المركزي. حاول مرة أخرى.');
+  } finally {
+    submit.disabled=false;
+    selectPayment(document.querySelector(`.payment-option[data-pay="${selectedPayment}"]`));
+  }
+};
+
+async function loadProductionCatalog(){
+  try{
+    const result=await window.KhalasaApi.request('/catalog');
+    if(!Array.isArray(result.products)||!result.products.length)return;
+    const artwork={food:['🍔','#fde9d6'],grocery:['🛒','#f4edd8'],pharmacy:['💊','#dff2e8'],gold:['💍','#f6efd5'],appliances:['🔌','#e7eef7']};
+    restaurants.splice(0,restaurants.length,...result.products.map((product,index)=>{
+      const [emoji,bg]=artwork[product.category]||['🛍️','#e4efe9'];
+      return {id:index+1,apiProductId:product.product_id,merchantId:product.merchant_id,name:product.merchant_name,category:product.category||'all',emoji,bg,rating:'جديد',time:'يُحدد بعد قبول الطلب',fee:'الدفع عند الاستلام',offer:'متاح الآن',item:product.product_name,price:Number(product.price)};
+    }));
+    cart=[];renderRestaurants();renderCart();
+  }catch(error){console.warn('Catalog unavailable',error.message);}
+}
+loadProductionCatalog();
+
+// Khalasa production API configuration.
+// Keep this value centralized so all web apps use the same backend.
+window.KHALASA_API_URL = "https://khalasa-api.onrender.com";
+
+window.khalasaFetch = async function khalasaFetch(path, options = {}) {
+  const apiUrl = window.KHALASA_API_URL.replace(/\/$/, "");
+  const requestUrl = path.startsWith("http") ? path : `${apiUrl}${path.startsWith("/") ? path : `/${path}`}`;
+  const requestOptions = {
+    ...options,
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+      ...(options.headers || {}),
+    },
+  };
+
+  let lastError;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      // Render's starter instance may sleep. Wake it before the first API call.
+      if (attempt === 0 && !path.includes("/health")) {
+        await fetch(`${apiUrl}/health`, { mode: "cors", cache: "no-store" });
+      }
+      const response = await fetch(requestUrl, requestOptions);
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(payload.message || payload.error || `HTTP ${response.status}`);
+      }
+      return payload;
+    } catch (error) {
+      lastError = error;
+      if (attempt === 0) await new Promise((resolve) => setTimeout(resolve, 1800));
+    }
+  }
+
+  const message = lastError && lastError.message;
+  if (message === "Failed to fetch" || message === "Load failed" || message === "NetworkError when attempting to fetch resource.") {
+    throw new Error("تعذر الاتصال بخادم خالصة الآن. انتظر لحظات ثم أعد المحاولة وتأكد من اتصال الإنترنت.");
+  }
+  throw lastError || new Error("تعذر الاتصال بخادم خالصة.");
+};
