@@ -221,9 +221,10 @@ app.post('/v1/orders', auth('customer'), asyncRoute(async (req, res) => {
 }));
 
 app.get('/v1/customer/orders', auth('customer'), asyncRoute(async (req,res)=>{
-  const rows=await pool.query(`SELECT id,public_code,status,delivery_address,merchandise_total,delivery_fee,created_at,updated_at FROM orders WHERE customer_id=$1 ORDER BY created_at DESC LIMIT 20`,[req.user.sub]);
+  const rows=await pool.query(`SELECT o.id,o.public_code,o.status,o.delivery_address,o.merchandise_total,o.delivery_fee,o.created_at,o.updated_at,m.display_name merchant_name,mu.phone merchant_phone,ru.full_name rider_name,ru.phone rider_phone,r.vehicle_type rider_vehicle_type,COALESCE((SELECT json_agg(json_build_object('productName',oi.product_name,'quantity',oi.quantity,'unitPrice',oi.unit_price) ORDER BY oi.id) FROM order_items oi WHERE oi.order_id=o.id),'[]'::json) items,(SELECT oe.note FROM order_events oe WHERE oe.order_id=o.id AND oe.status='cancelled' ORDER BY oe.created_at DESC LIMIT 1) cancellation_reason FROM orders o JOIN merchants m ON m.id=o.merchant_id JOIN users mu ON mu.id=m.owner_user_id LEFT JOIN riders r ON r.id=o.rider_id LEFT JOIN users ru ON ru.id=r.user_id WHERE o.customer_id=$1 ORDER BY o.created_at DESC LIMIT 20`,[req.user.sub]);
   res.json({orders:rows.rows});
 }));
+app.post('/v1/customer/orders/:id/cancel', auth('customer'), asyncRoute(async(req,res)=>{const reason=String(req.body.reason||'ألغى العميل الطلب قبل قبول المحل').trim().slice(0,300);const result=await pool.query(`UPDATE orders SET status='cancelled',updated_at=now() WHERE id=$1 AND customer_id=$2 AND status='awaiting_merchant' RETURNING id`,[req.params.id,req.user.sub]);if(!result.rowCount)return res.status(409).json({error:'ORDER_CAN_NO_LONGER_BE_CANCELLED'});await pool.query(`INSERT INTO order_events(order_id,actor_user_id,status,note) VALUES($1,$2,'cancelled',$3)`,[req.params.id,req.user.sub,reason]);res.json({ok:true});}));
 app.post('/v1/customer/orders/:id/reset-delivery-code', auth('customer'), asyncRoute(async(req,res)=>{
   const otp=crypto.randomInt(1000,10000).toString();
   const order=await pool.query(`UPDATE orders SET delivery_otp_hash=$1,delivery_otp_attempts=0,delivery_otp_locked_at=NULL,updated_at=now() WHERE id=$2 AND customer_id=$3 AND status IN ('assigned','picked_up') RETURNING id,public_code,status`,[otpHash(otp),req.params.id,req.user.sub]);
