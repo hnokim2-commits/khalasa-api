@@ -23,12 +23,14 @@ export function distanceKm(aLat, aLng, bLat, bLng) {
 
 export function routeCompatibility(activeOrders, candidate, vehicleType) {
   const policy = routePolicyFor(vehicleType);
+  // The first assignment does not need distance comparison. Legacy orders may
+  // have a written address without coordinates and must remain deliverable.
+  if (!activeOrders.length) return { compatible: true, policy, pickupDistanceKm: 0, deliveryDistanceKm: 0 };
   if (!hasCoordinates(candidate?.merchant_lat, candidate?.merchant_lng) || !hasCoordinates(candidate?.delivery_lat, candidate?.delivery_lng)) {
     return { compatible: false, reason: 'ORDER_LOCATION_REQUIRED', policy };
   }
   if (activeOrders.length >= policy.capacity) return { compatible: false, reason: 'RIDER_ROUTE_CAPACITY_REACHED', policy };
   if (activeOrders.some(order => order.status === 'picked_up')) return { compatible: false, reason: 'DELIVER_CURRENT_ORDER_FIRST', policy };
-  if (!activeOrders.length) return { compatible: true, policy, pickupDistanceKm: 0, deliveryDistanceKm: 0 };
   const anchor = activeOrders[0];
   const pickupDistanceKm = distanceKm(anchor.merchant_lat, anchor.merchant_lng, candidate.merchant_lat, candidate.merchant_lng);
   const deliveryDistanceKm = distanceKm(anchor.delivery_lat, anchor.delivery_lng, candidate.delivery_lat, candidate.delivery_lng);
