@@ -1,20 +1,21 @@
-# Khalasa API
-
-خادم التشغيل الحقيقي لتطبيقات العميل والمحل والمندوب والإدارة. الواجهة المنشورة على Netlify تبقى واجهة فقط؛ هذا الخادم ينشر منفصلاً مع قاعدة PostgreSQL.
-
-## تشغيل محلي
-
-1. انسخ `.env.example` إلى `.env` وعدّل `JWT_SECRET`.
-2. شغّل PostgreSQL: `docker compose up -d`.
-3. ثبّت الحزم: `npm install`.
-4. أنشئ الجداول: `npm run db:migrate`.
-5. شغّل الخادم: `npm run dev`.
-
-## قبل النشر الفعلي
-
-- أنشئ PostgreSQL مستضافاً وأدخل `DATABASE_URL` في إعدادات الخادم، لا في Netlify.
-- اضبط `NODE_ENV=production` و`CORS_ORIGINS` على رابط خالصة فقط.
-- استخدم مزود SMS حقيقي لـOTP؛ لا تفعّل التسجيل الحقيقي قبل ذلك.
-- استخدم مساحة تخزين خاصة للمستندات ولا تضع صور البطاقات في رابط عام.
-- أضف مزود دفع معتمد وWebhook مُوقّع لتأكيد المدفوعات.
-- لا تحفظ كلمات مرور الكاشير أو Meta؛ الربط يكون OAuth أو API key مشفّر على الخادم.
+{
+  "name": "khalasa-api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node --watch src/server.mjs",
+    "start": "node src/migrate.mjs && node src/server.mjs",
+    "db:migrate": "node src/migrate.mjs",
+    "check": "node --check src/server.mjs && node --test",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.6.1",
+    "exceljs": "^4.4.0",
+    "express": "^5.1.0",
+    "jsonwebtoken": "^9.0.2",
+    "pg": "^8.16.3"
+  }
+}
