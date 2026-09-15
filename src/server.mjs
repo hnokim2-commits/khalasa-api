@@ -30,6 +30,10 @@ app.use((_req, res, next) => {
   next();
 });
 
+const realtimeClients=new Set();
+function publishRealtime(){const payload=`event: update\ndata: ${JSON.stringify({type:'data_changed',at:new Date().toISOString()})}\n\n`;for(const client of realtimeClients){try{client.write(payload);}catch{realtimeClients.delete(client);}}}
+app.use((req,res,next)=>{res.on('finish',()=>{if(res.statusCode>=200&&res.statusCode<300&&['POST','PATCH','PUT','DELETE'].includes(req.method)&&/^\/v1\/(orders|customer\/orders|admin\/orders|city-admin\/orders|rider\/availability)/.test(req.path))publishRealtime(req.path);});next();});
+
 const requestWindows = new Map();
 function rateLimit({ limit = 5, windowMs = 10 * 60 * 1000, key = req => req.ip }) {
   return (req, res, next) => {
@@ -101,6 +105,7 @@ async function deliverOtp({ phone, email }, otp) {
 }
 
 app.get('/health', asyncRoute(async (_req, res) => { await pool.query('SELECT 1'); res.json({ ok: true, service: 'khalasa-api' }); }));
+app.get('/v1/realtime',auth(),(req,res)=>{res.set({'Content-Type':'text/event-stream','Cache-Control':'no-cache, no-transform','Connection':'keep-alive','X-Accel-Buffering':'no'});res.flushHeaders?.();res.write(`event: ready\ndata: ${JSON.stringify({ok:true,role:req.user.role})}\n\n`);realtimeClients.add(res);const heartbeat=setInterval(()=>res.write(`: heartbeat ${Date.now()}\n\n`),25000);heartbeat.unref();req.on('close',()=>{clearInterval(heartbeat);realtimeClients.delete(res);});});
 app.get('/v1/catalog', asyncRoute(async (_req,res)=>{
   const rows=await pool.query(`SELECT p.id product_id,p.name product_name,p.price,m.id merchant_id,m.display_name merchant_name,m.category,m.minimum_order,m.city_id FROM products p JOIN merchants m ON m.id=p.merchant_id WHERE p.is_available=true AND m.is_accepting_orders=true AND m.verification='approved' ORDER BY m.display_name,p.name LIMIT 200`);
   res.json({products:rows.rows});
