@@ -33,7 +33,7 @@ app.use((_req, res, next) => {
 
 const realtimeClients=new Set();
 function publishRealtime(){const payload=`event: update\ndata: ${JSON.stringify({type:'data_changed',at:new Date().toISOString()})}\n\n`;for(const client of realtimeClients){try{client.write(payload);}catch{realtimeClients.delete(client);}}}
-app.use((req,res,next)=>{res.on('finish',()=>{if(res.statusCode>=200&&res.statusCode<300&&['POST','PATCH','PUT','DELETE'].includes(req.method)&&/^\/v1\/(orders|customer\/orders|admin\/orders|city-admin\/orders|rider\/availability)/.test(req.path))publishRealtime(req.path);});next();});
+app.use((req,res,next)=>{res.on('finish',()=>{if(res.statusCode>=200&&res.statusCode<300&&['POST','PATCH','PUT','DELETE'].includes(req.method)&&/^\/v1\/(orders|customer\/orders|admin\/orders|city-admin\/orders|rider\/availability|merchant\/(profile|products))/.test(req.path))publishRealtime(req.path);});next();});
 
 const requestWindows = new Map();
 function rateLimit({ limit = 5, windowMs = 10 * 60 * 1000, key = req => req.ip }) {
