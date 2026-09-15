@@ -1,1 +1,42 @@
-:root{--green:#157a5b;--green-dark:#123f31;--orange:#fb6d3a;--ink:#17261f;--muted:#77847d;--line:#e8ece8}*{box-sizing:border-box}body{margin:0;background:#e9eeea;font-family:Cairo,Arial,sans-serif;color:var(--ink)}.phone{position:relative;margin:auto;min-height:100vh;max-width:470px;background:#fbfdfb;padding-bottom:86px;box-shadow:0 0 40px #10241822}header{padding:21px 18px 12px;display:flex;align-items:center;gap:10px;background:linear-gradient(135deg,#173c30,#186a50);color:#fff}.avatar{width:39px;height:39px;border:2px solid #ffffff55;border-radius:50%;display:grid;place-items:center;background:#f7d6a4;color:#754726;font-weight:800}header small,header b{display:block}header small{font-size:10px;color:#cae5d8}header b{font-size:14px}.wallet{margin-right:auto;border:1px solid #ffffff38;background:#ffffff1a;color:#fff;border-radius:10px;padding:7px 9px;text-align:right;font:10px Cairo}.wallet strong{display:block;font-size:12px}.status{margin:14px 16px 0;background:#eaf8ee;border:1px solid #d5eadb;padding:11px 12px;border-radius:12px;display:flex;align-items:center;justify-content:space-between}.status span,.status small{display:block}.status span{font-size:12px;font-weight:800;color:#14794d}.status small{font-size:9px;color:#5e896f}.toggle{width:43px;height:24px;border:0;border-radius:18px;background:#cdd4d0;position:relative}.toggle:after{content:'';width:18px;height:18px;background:#fff;border-radius:50%;position:absolute;top:3px;right:3px;transition:.2s}.toggle.on{background:#34a368}.toggle.on:after{right:22px}main{padding:17px 16px}.earnings{background:linear-gradient(120deg,#f16a3b,#f49351);border-radius:17px;color:#fff;padding:17px 18px;display:flex;justify-content:space-between;align-items:center;box-shadow:0 9px 20px #e85e3333}.earnings small,.earnings b,.earnings span{display:block}.earnings small{font-size:10px;color:#fff0e8}.earnings b{font-size:27px;line-height:1.25}.earnings span{font-size:10px;color:#ffe5d4}.bike{font-size:54px;filter:drop-shadow(3px 5px #a6432922);transform:scaleX(-1)}.label{font-size:13px;font-weight:800;margin:22px 2px 10px}.new-order{background:#fff;border:1px solid var(--line);border-radius:16px;padding:15px;box-shadow:0 6px 18px #1930260f}.order-top{display:flex;justify-content:space-between;border-bottom:1px dashed #dce4df;padding-bottom:11px;font-size:12px}.order-top b{color:var(--green)}.route{display:flex;gap:10px;padding:13px 2px 0;position:relative}.route i{flex:none;width:24px;height:24px;display:grid;place-items:center;border-radius:50%;background:#e2f4e9;color:var(--green);font-style:normal;font:800 11px Arial;z-index:1}.route:first-of-type:after{content:'';position:absolute;width:1px;background:#c6d7ce;height:24px;top:37px;right:13px}.route .end{background:#fce8e1;color:var(--orange)}.route small,.route b,.route p{display:block}.route small{font-size:9px;color:var(--muted)}.route b{font-size:14px}.route p{margin:2px 0;font-size:10px;color:var(--muted)}.summary{background:#f5f8f6;border-radius:9px;padding:10px;display:flex;justify-content:space-between;color:#5b6962;font-size:10px;margin:14px 0}.actions{display:flex;gap:9px}.actions button{flex:1;border:0;border-radius:10px;padding:12px;font:700 12px Cairo}.accept{background:var(--green);color:#fff;box-shadow:0 5px 10px #157a5b2e}.decline{background:#fff0ed;color:#c45536}.notice{display:flex;gap:9px;margin-top:16px;background:#fff8df;padding:10px;border-radius:11px}.notice span{font-size:21px}.notice p{margin:0;font-size:10px;color:#69736e}.notice b{font-size:11px;color:#4c5b53}nav{height:70px;position:absolute;bottom:0;left:0;right:0;background:#fff;border-top:1px solid var(--line);display:flex;justify-content:space-around}nav button{min-width:64px;background:#fff;border:0;color:#7c8781;font-size:19px;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:1px}nav span{font:9px Cairo}nav .active{color:var(--green);position:relative}nav .active:before{content:'';position:absolute;top:0;width:27px;height:3px;border-radius:0 0 3px 3px;background:var(--green)}.toast{position:fixed;z-index:20;bottom:88px;right:50%;transform:translate(50%,90px);padding:10px 16px;color:#fff;background:#1a3c30;border-radius:9px;font-size:11px;opacity:0;transition:.2s;white-space:nowrap}.toast.show{transform:translate(50%,0);opacity:1}@media(min-width:500px){.phone{margin-top:20px;min-height:780px;border-radius:25px;overflow:hidden}}@media(max-width:370px){.summary{gap:4px;font-size:9px}.wallet{padding:5px}.bike{font-size:46px}}
+export const ROUTE_POLICIES = Object.freeze({
+  bicycle: Object.freeze({ pickupKm: 0.5, deliveryKm: 1, detourMinutes: 5, capacity: 2 }),
+  motorcycle: Object.freeze({ pickupKm: 1, deliveryKm: 2, detourMinutes: 7, capacity: 2 }),
+  car: Object.freeze({ pickupKm: 2, deliveryKm: 4, detourMinutes: 10, capacity: 2 })
+});
+
+export function routePolicyFor(vehicleType) {
+  return ROUTE_POLICIES[vehicleType] || ROUTE_POLICIES.motorcycle;
+}
+
+export function hasCoordinates(lat, lng) {
+  return lat !== null && lat !== undefined && lat !== '' && lng !== null && lng !== undefined && lng !== '' && Number.isFinite(Number(lat)) && Number.isFinite(Number(lng));
+}
+
+export function distanceKm(aLat, aLng, bLat, bLng) {
+  if (!hasCoordinates(aLat, aLng) || !hasCoordinates(bLat, bLng)) return null;
+  const rad = value => Number(value) * Math.PI / 180;
+  const dLat = rad(Number(bLat) - Number(aLat));
+  const dLng = rad(Number(bLng) - Number(aLng));
+  const value = Math.sin(dLat / 2) ** 2 + Math.cos(rad(aLat)) * Math.cos(rad(bLat)) * Math.sin(dLng / 2) ** 2;
+  return 6371 * 2 * Math.atan2(Math.sqrt(value), Math.sqrt(1 - value));
+}
+
+export function routeCompatibility(activeOrders, candidate, vehicleType) {
+  const policy = routePolicyFor(vehicleType);
+  // The first assignment does not need distance comparison. Legacy orders may
+  // have a written address without coordinates and must remain deliverable.
+  if (!activeOrders.length) return { compatible: true, policy, pickupDistanceKm: 0, deliveryDistanceKm: 0 };
+  if (!hasCoordinates(candidate?.merchant_lat, candidate?.merchant_lng) || !hasCoordinates(candidate?.delivery_lat, candidate?.delivery_lng)) {
+    return { compatible: false, reason: 'ORDER_LOCATION_REQUIRED', policy };
+  }
+  if (activeOrders.length >= policy.capacity) return { compatible: false, reason: 'RIDER_ROUTE_CAPACITY_REACHED', policy };
+  if (activeOrders.some(order => order.status === 'picked_up')) return { compatible: false, reason: 'DELIVER_CURRENT_ORDER_FIRST', policy };
+  const anchor = activeOrders[0];
+  const pickupDistanceKm = distanceKm(anchor.merchant_lat, anchor.merchant_lng, candidate.merchant_lat, candidate.merchant_lng);
+  const deliveryDistanceKm = distanceKm(anchor.delivery_lat, anchor.delivery_lng, candidate.delivery_lat, candidate.delivery_lng);
+  if (pickupDistanceKm === null || deliveryDistanceKm === null) return { compatible: false, reason: 'ACTIVE_ROUTE_LOCATION_REQUIRED', policy };
+  if (pickupDistanceKm > policy.pickupKm || deliveryDistanceKm > policy.deliveryKm) {
+    return { compatible: false, reason: 'ORDER_NOT_COMPATIBLE_WITH_CURRENT_ROUTE', policy, pickupDistanceKm, deliveryDistanceKm };
+  }
+  return { compatible: true, policy, pickupDistanceKm, deliveryDistanceKm };
+}
