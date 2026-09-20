@@ -1,15 +1,15 @@
-INSERT INTO storage.buckets(id,name,public,file_size_limit,allowed_mime_types)
-VALUES('partner-documents','partner-documents',false,4194304,ARRAY['image/jpeg','image/png','application/pdf'])
-ON CONFLICT(id) DO UPDATE SET public=false,file_size_limit=4194304,allowed_mime_types=EXCLUDED.allowed_mime_types;
-
-ALTER TABLE rider_documents ADD COLUMN IF NOT EXISTS original_name text;
-ALTER TABLE rider_documents ADD COLUMN IF NOT EXISTS mime_type text;
-ALTER TABLE rider_documents ADD COLUMN IF NOT EXISTS file_size integer;
-ALTER TABLE rider_documents ADD COLUMN IF NOT EXISTS review_note text;
-ALTER TABLE rider_documents ADD COLUMN IF NOT EXISTS reviewed_by uuid REFERENCES users(id);
-ALTER TABLE rider_documents ADD COLUMN IF NOT EXISTS reviewed_at timestamptz;
-
-ALTER TABLE merchant_documents ADD COLUMN IF NOT EXISTS original_name text;
-ALTER TABLE merchant_documents ADD COLUMN IF NOT EXISTS mime_type text;
-ALTER TABLE merchant_documents ADD COLUMN IF NOT EXISTS file_size integer;
-ALTER TABLE merchant_documents ADD COLUMN IF NOT EXISTS review_note text;
+CREATE TABLE IF NOT EXISTS merchant_applications (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  owner_name text NOT NULL,
+  display_name text NOT NULL,
+  phone text NOT NULL,
+  category text NOT NULL,
+  city_id uuid NOT NULL REFERENCES cities(id),
+  address text NOT NULL,
+  access_code_hash text NOT NULL,
+  status text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','rejected')),
+  reviewed_by uuid REFERENCES users(id),
+  reviewed_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS merchant_applications_one_pending_phone ON merchant_applications(phone) WHERE status='pending';
