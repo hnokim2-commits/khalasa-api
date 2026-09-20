@@ -18,7 +18,8 @@ const commissionRate = Number(process.env.PLATFORM_COMMISSION_RATE || 0.12);
 const allowedOrigins = (process.env.CORS_ORIGINS || '').split(',').map(value=>value.trim().replace(/\/$/, '')).filter(Boolean);
 const pool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false });
 app.use(cors({ origin(origin, callback) { if (!origin || allowedOrigins.includes(origin)) return callback(null, true); callback(new Error('CORS_NOT_ALLOWED')); } }));
-app.use(express.json({ limit: '6mb' }));
+const standardJsonParser=express.json({limit:'512kb'}),documentJsonParser=express.json({limit:'6mb'});
+app.use((req,res,next)=>req.method==='POST'&&/^\/v1\/(rider|merchant)\/documents$/.test(req.path)?documentJsonParser(req,res,next):standardJsonParser(req,res,next));
 app.use((_req, res, next) => {
   res.set({
     'X-Content-Type-Options': 'nosniff',
@@ -35,30 +36,22 @@ const realtimeClients=new Set();
 function publishRealtime(){const payload=`event: update\ndata: ${JSON.stringify({type:'data_changed',at:new Date().toISOString()})}\n\n`;for(const client of realtimeClients){try{client.write(payload);}catch{realtimeClients.delete(client);}}}
 app.use((req,res,next)=>{res.on('finish',()=>{if(res.statusCode>=200&&res.statusCode<300&&['POST','PATCH','PUT','DELETE'].includes(req.method)&&/^\/v1\/(orders|customer\/orders|admin\/orders|city-admin\/orders|rider\/(availability|profile)|merchant\/(profile|products))/.test(req.path))publishRealtime(req.path);});next();});
 
-const requestWindows = new Map();
+const asyncRoute = handler => (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next);
 function rateLimit({ limit = 5, windowMs = 10 * 60 * 1000, key = req => req.ip }) {
-  return (req, res, next) => {
-    const now = Date.now();
-    const bucketKey = `${req.path}:${key(req)}`;
-    const bucket = requestWindows.get(bucketKey);
-    if (!bucket || bucket.resetAt <= now) {
-      requestWindows.set(bucketKey, { count: 1, resetAt: now + windowMs });
-      return next();
-    }
-    if (bucket.count >= limit) {
-      res.set('Retry-After', String(Math.ceil((bucket.resetAt - now) / 1000)));
-      return res.status(429).json({ error: 'TOO_MANY_ATTEMPTS' });
-    }
-    bucket.count += 1;
+  return asyncRoute(async(req,res,next)=>{
+    const rawKey=`${req.path}:${key(req)}`;
+    const bucketKey=crypto.createHmac('sha256',process.env.RATE_LIMIT_SECRET||process.env.JWT_SECRET).update(rawKey).digest('hex');
+    const windowSeconds=Math.max(1,Math.ceil(windowMs/1000));
+    const bucket=await pool.query(`INSERT INTO request_rate_limits(bucket_key,request_count,reset_at) VALUES($1,1,now()+make_interval(secs=>$2)) ON CONFLICT(bucket_key) DO UPDATE SET request_count=CASE WHEN request_rate_limits.reset_at<=now() THEN 1 ELSE request_rate_limits.request_count+1 END,reset_at=CASE WHEN request_rate_limits.reset_at<=now() THEN now()+make_interval(secs=>$2) ELSE request_rate_limits.reset_at END,updated_at=now() RETURNING request_count,reset_at`,[bucketKey,windowSeconds]);
+    if(bucket.rows[0].request_count>limit){res.set('Retry-After',String(Math.max(1,Math.ceil((new Date(bucket.rows[0].reset_at).getTime()-Date.now())/1000))));return res.status(429).json({error:'TOO_MANY_ATTEMPTS'});}
     next();
-  };
+  });
 }
 const authRateLimit = rateLimit({ limit: 8, key: req => `${req.ip}:${String(req.body?.phone || '')}` });
 app.use((req, res, next) => ['/v1/staff/login', '/v1/partner/login', '/v1/partner/recovery-requests', '/v1/auth/request-otp', '/v1/auth/verify-otp'].includes(req.path) ? authRateLimit(req, res, next) : next());
-const cleanupTimer = setInterval(() => { const now=Date.now(); for (const [key,bucket] of requestWindows) if (bucket.resetAt <= now) requestWindows.delete(key); }, 10 * 60 * 1000);
+const cleanupTimer=setInterval(()=>pool.query(`DELETE FROM request_rate_limits WHERE reset_at<now()-interval '1 hour'`).catch(()=>{}),60*60*1000);
 cleanupTimer.unref();
 
-const asyncRoute = handler => (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next);
 const documentTypes={rider:['national_id','driving_license','vehicle_license','criminal_record'],merchant:['commercial_register','tax_card','owner_id','activity_license']};
 function storageConfig(){const url=String(process.env.SUPABASE_URL||'').replace(/\/$/,''),key=process.env.SUPABASE_SERVICE_ROLE_KEY,bucket=process.env.SUPABASE_DOCUMENTS_BUCKET||'partner-documents';if(!url||!key)throw new Error('PRIVATE_STORAGE_NOT_CONFIGURED');return{url,key,bucket};}
 function hasExpectedSignature(buffer,mimeType){
@@ -75,8 +68,11 @@ async function putPrivateObject(path,file){const{url,key,bucket}=storageConfig()
 async function signedPrivateUrl(path){const{url,key,bucket}=storageConfig(),response=await fetch(`${url}/storage/v1/object/sign/${bucket}/${path}`,{method:'POST',headers:{Authorization:`Bearer ${key}`,apikey:key,'Content-Type':'application/json'},body:JSON.stringify({expiresIn:300})}),data=await response.json();if(!response.ok||!data.signedURL)throw new Error('PRIVATE_STORAGE_SIGN_FAILED');return data.signedURL.startsWith('http')?data.signedURL:`${url}/storage/v1${data.signedURL}`;}
 const publicCode = () => `KH-${Date.now().toString(36).toUpperCase()}-${crypto.randomBytes(2).toString('hex').toUpperCase()}`;
 const legacyOtpHash = otp => crypto.createHash('sha256').update(String(otp)).digest('hex');
-const otpHash = otp => `v2:${crypto.createHmac('sha256',process.env.JWT_SECRET).update(`delivery:${String(otp)}`).digest('hex')}`;
-const otpMatches = (otp,stored) => {const expected=String(stored||''),candidate=expected.startsWith('v2:')?otpHash(otp):legacyOtpHash(otp),left=Buffer.from(candidate),right=Buffer.from(expected);return left.length===right.length&&crypto.timingSafeEqual(left,right);};
+const deliveryOtpSecret=()=>process.env.DELIVERY_OTP_SECRET||process.env.JWT_SECRET;
+const authOtpSecret=()=>process.env.AUTH_OTP_SECRET||process.env.JWT_SECRET;
+const otpHash = otp => `v3:${crypto.createHmac('sha256',deliveryOtpSecret()).update(`delivery:${String(otp)}`).digest('hex')}`;
+const legacyHmacOtpHash = otp => `v2:${crypto.createHmac('sha256',process.env.JWT_SECRET).update(`delivery:${String(otp)}`).digest('hex')}`;
+const otpMatches = (otp,stored) => {const expected=String(stored||''),candidate=expected.startsWith('v3:')?otpHash(otp):expected.startsWith('v2:')?legacyHmacOtpHash(otp):legacyOtpHash(otp),left=Buffer.from(candidate),right=Buffer.from(expected);return left.length===right.length&&crypto.timingSafeEqual(left,right);};
 function customerOrderView(order, deliveryOtp) { const { delivery_otp_hash: _otpHash, idempotency_key: _idempotencyKey, ...safe } = order; return deliveryOtp ? { ...safe, deliveryOtp } : safe; }
 const jwtOptions={algorithms:['HS256'],issuer:'khalasa-api',audience:'khalasa-web'};
 async function tokenFor(user) { const current=await pool.query('UPDATE users SET last_login_at=now() WHERE id=$1 RETURNING session_version,role,phone',[user.id]);if(!current.rowCount)throw operationalError('USER_NOT_FOUND',404);const identity=current.rows[0];return jwt.sign({ sub: user.id, role: identity.role, phone: identity.phone, ver:Number(identity.session_version||0) }, process.env.JWT_SECRET, { algorithm:'HS256',issuer:jwtOptions.issuer,audience:jwtOptions.audience,expiresIn: ['admin','city_admin'].includes(identity.role) ? '8h' : '24h' }); }
@@ -234,7 +230,7 @@ app.post('/v1/auth/request-otp', asyncRoute(async (req, res) => {
   if(existing.rows.some(user=>user.email&&user.email.toLowerCase()===email&&user.phone!==phone))return res.status(409).json({error:'EMAIL_ALREADY_IN_USE'});
   if(existing.rows.some(user=>user.phone===phone&&user.is_email_verified&&user.email?.toLowerCase()!==email))return res.status(409).json({error:'PHONE_ALREADY_IN_USE'});
   if(process.env.NODE_ENV==='production'&&!['webhook','meta_whatsapp','resend_email'].includes(process.env.OTP_PROVIDER))return res.status(503).json({error:'OTP_PROVIDER_NOT_CONFIGURED'});
-  const otp=crypto.randomInt(100000,1000000).toString(),hash=crypto.createHmac('sha256',process.env.JWT_SECRET).update(`${phone}:${otp}`).digest('hex');
+  const otp=crypto.randomInt(100000,1000000).toString(),hash=`v2:${crypto.createHmac('sha256',authOtpSecret()).update(`${phone}:${otp}`).digest('hex')}`;
   await pool.query(`UPDATE auth_challenges SET consumed_at=now() WHERE phone=$1 AND purpose='customer_login' AND consumed_at IS NULL`,[phone]);
   await pool.query(`INSERT INTO auth_challenges(phone,email,otp_hash,expires_at) VALUES($1,$2,$3,now()+interval '5 minutes')`,[phone,email||null,hash]);
   if(process.env.NODE_ENV==='production'){try{await deliverOtp({phone,email},otp);}catch(error){if(error.message==='OTP_PROVIDER_NOT_CONFIGURED')return res.status(503).json({error:'OTP_PROVIDER_NOT_CONFIGURED'});return res.status(502).json({error:'OTP_DELIVERY_FAILED'});}}
@@ -245,8 +241,8 @@ app.post('/v1/auth/verify-otp',asyncRoute(async(req,res)=>{
   if(!/^01\d{9}$/.test(phone)||!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)||!fullName||fullName.length>120||!/^\d{6}$/.test(otp))return res.status(400).json({error:'INVALID_VERIFICATION_FIELDS'});
   const challenge=await pool.query(`SELECT id,email,otp_hash,attempts FROM auth_challenges WHERE phone=$1 AND lower(email)=lower($2) AND purpose='customer_login' AND consumed_at IS NULL AND expires_at>now() ORDER BY created_at DESC LIMIT 1`,[phone,email]);
   if(!challenge.rowCount||challenge.rows[0].attempts>=5)return res.status(401).json({error:'OTP_INVALID_OR_EXPIRED'});
-  const hash=crypto.createHmac('sha256',process.env.JWT_SECRET).update(`${phone}:${otp}`).digest('hex');
-  const valid=crypto.timingSafeEqual(Buffer.from(hash,'hex'),Buffer.from(challenge.rows[0].otp_hash,'hex'));
+  const storedHash=String(challenge.rows[0].otp_hash||''),hash=storedHash.startsWith('v2:')?`v2:${crypto.createHmac('sha256',authOtpSecret()).update(`${phone}:${otp}`).digest('hex')}`:crypto.createHmac('sha256',process.env.JWT_SECRET).update(`${phone}:${otp}`).digest('hex');
+  const valid=hash.length===storedHash.length&&crypto.timingSafeEqual(Buffer.from(hash),Buffer.from(storedHash));
   if(!valid){await pool.query('UPDATE auth_challenges SET attempts=attempts+1 WHERE id=$1',[challenge.rows[0].id]);return res.status(401).json({error:'OTP_INVALID_OR_EXPIRED'});}
   const client=await pool.connect();
   try{
