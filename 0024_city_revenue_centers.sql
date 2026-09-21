@@ -1,9 +1,6 @@
-CREATE TABLE IF NOT EXISTS request_rate_limits (
-  bucket_key text PRIMARY KEY,
-  request_count integer NOT NULL DEFAULT 0 CHECK (request_count >= 0),
-  reset_at timestamptz NOT NULL,
-  updated_at timestamptz NOT NULL DEFAULT now()
-);
+ALTER TABLE users
+  ADD COLUMN IF NOT EXISTS session_version integer NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS last_login_at timestamptz;
 
-CREATE INDEX IF NOT EXISTS request_rate_limits_reset_at_idx
-  ON request_rate_limits(reset_at);
+CREATE INDEX IF NOT EXISTS users_session_version_idx ON users(id, session_version);
+
