@@ -1,56 +1,50 @@
-ALTER TABLE orders ADD COLUMN IF NOT EXISTS refunded_at timestamptz;
-ALTER TABLE orders ADD COLUMN IF NOT EXISTS refund_reason text;
-ALTER TABLE orders ADD COLUMN IF NOT EXISTS refunded_by uuid REFERENCES users(id);
-
-CREATE TABLE IF NOT EXISTS order_refunds (
+CREATE TABLE IF NOT EXISTS city_revenue_rules (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  order_id uuid NOT NULL UNIQUE REFERENCES orders(id),
-  amount numeric(12,2) NOT NULL CHECK(amount > 0),
-  reason text NOT NULL CHECK(length(reason) >= 3),
-  refund_channel text NOT NULL DEFAULT 'cash_by_admin' CHECK(refund_channel IN ('cash_by_admin','original_payment_method')),
-  created_by uuid NOT NULL REFERENCES users(id),
-  created_at timestamptz NOT NULL DEFAULT now()
+  city_id uuid REFERENCES cities(id),
+  city_share_percent numeric(5,2) NOT NULL DEFAULT 60 CHECK (city_share_percent BETWEEN 0 AND 100),
+  effective_from timestamptz NOT NULL DEFAULT now(),
+  effective_to timestamptz,
+  is_active boolean NOT NULL DEFAULT true,
+  created_by uuid REFERENCES users(id),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  CHECK (effective_to IS NULL OR effective_to > effective_from)
 );
 
-ALTER TABLE merchant_wallet_entries DROP CONSTRAINT IF EXISTS merchant_wallet_entries_entry_type_check;
-ALTER TABLE merchant_wallet_entries ADD CONSTRAINT merchant_wallet_entries_entry_type_check
-CHECK(entry_type IN ('order_earning','settlement','refund_reversal'));
-ALTER TABLE merchant_wallet_entries DROP CONSTRAINT IF EXISTS merchant_wallet_entries_order_id_key;
-CREATE UNIQUE INDEX IF NOT EXISTS merchant_wallet_entries_order_type_unique
-ON merchant_wallet_entries(order_id,entry_type) WHERE order_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS city_revenue_rules_one_active_city
+ON city_revenue_rules(COALESCE(city_id,'00000000-0000-0000-0000-000000000000'::uuid))
+WHERE is_active=true AND effective_to IS NULL;
 
-ALTER TABLE rider_wallet_entries DROP CONSTRAINT IF EXISTS rider_wallet_entries_entry_type_check;
-ALTER TABLE rider_wallet_entries ADD CONSTRAINT rider_wallet_entries_entry_type_check
-CHECK(entry_type IN ('delivery_earning','withdrawal','cash_collection','cash_remittance','delivery_refund_reversal','cash_refund_reversal'));
+INSERT INTO city_revenue_rules(city_id,city_share_percent)
+SELECT NULL,60
+WHERE NOT EXISTS(SELECT 1 FROM city_revenue_rules WHERE city_id IS NULL AND is_active=true);
 
-CREATE INDEX IF NOT EXISTS order_refunds_created_idx ON order_refunds(created_at DESC);
-ALTER TABLE order_refunds ENABLE ROW LEVEL SECURITY;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS city_share_percent numeric(5,2) NOT NULL DEFAULT 60 CHECK(city_share_percent BETWEEN 0 AND 100);
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS city_admin_share numeric(12,2) NOT NULL DEFAULT 0 CHECK(city_admin_share>=0);
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS headquarters_share numeric(12,2) NOT NULL DEFAULT 0 CHECK(headquarters_share>=0);
 
-CREATE OR REPLACE FUNCTION mark_refunded_order_cancelled() RETURNS trigger AS $$
-BEGIN
-  IF NEW.refunded_at IS NOT NULL AND OLD.refunded_at IS NULL THEN
-    NEW.status='cancelled';
-  END IF;
-  RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
+UPDATE orders SET
+  city_admin_share=round(platform_commission*city_share_percent/100,2),
+  headquarters_share=platform_commission-round(platform_commission*city_share_percent/100,2)
+WHERE city_admin_share=0 AND headquarters_share=0 AND platform_commission>0;
 
-DROP TRIGGER IF EXISTS orders_refund_status_trigger ON orders;
-CREATE TRIGGER orders_refund_status_trigger
-BEFORE UPDATE OF refunded_at ON orders
-FOR EACH ROW EXECUTE FUNCTION mark_refunded_order_cancelled();
+CREATE TABLE IF NOT EXISTS administration_revenue_entries (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  order_id uuid NOT NULL REFERENCES orders(id),
+  city_id uuid REFERENCES cities(id),
+  beneficiary text NOT NULL CHECK(beneficiary IN ('city','headquarters')),
+  entry_type text NOT NULL DEFAULT 'commission_share' CHECK(entry_type IN ('commission_share','reversal','adjustment','settlement')),
+  amount numeric(12,2) NOT NULL,
+  description text NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE(order_id,beneficiary,entry_type)
+);
 
-CREATE OR REPLACE FUNCTION record_refunded_order_event() RETURNS trigger AS $$
-BEGIN
-  IF NEW.refunded_at IS NOT NULL AND OLD.refunded_at IS NULL THEN
-    INSERT INTO order_events(order_id,actor_user_id,status,note)
-    VALUES(NEW.id,NEW.refunded_by,'cancelled','استرداد كامل: '||COALESCE(NEW.refund_reason,'سبب غير مسجل'));
-  END IF;
-  RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
+INSERT INTO administration_revenue_entries(order_id,city_id,beneficiary,amount,description,created_at)
+SELECT id,city_id,'city',city_admin_share,'حصة إدارة المدينة من الطلب '||public_code,updated_at FROM orders WHERE status='delivered' AND city_admin_share>0
+ON CONFLICT DO NOTHING;
+INSERT INTO administration_revenue_entries(order_id,city_id,beneficiary,amount,description,created_at)
+SELECT id,city_id,'headquarters',headquarters_share,'حصة الإدارة الرئيسية من الطلب '||public_code,updated_at FROM orders WHERE status='delivered' AND headquarters_share>0
+ON CONFLICT DO NOTHING;
 
-DROP TRIGGER IF EXISTS orders_refund_event_trigger ON orders;
-CREATE TRIGGER orders_refund_event_trigger
-AFTER UPDATE OF refunded_at ON orders
-FOR EACH ROW EXECUTE FUNCTION record_refunded_order_event();
+ALTER TABLE city_revenue_rules ENABLE ROW LEVEL SECURITY;
+ALTER TABLE administration_revenue_entries ENABLE ROW LEVEL SECURITY;
