@@ -1,11 +1,15 @@
-ALTER TABLE products
-ADD COLUMN IF NOT EXISTS image_url text;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivery_issue_code text;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivery_issue_note text;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivery_issue_reported_at timestamptz;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivery_retry_at timestamptz;
 
-ALTER TABLE products
-DROP CONSTRAINT IF EXISTS products_image_url_format;
+DO $$ BEGIN
+  ALTER TABLE orders ADD CONSTRAINT orders_delivery_issue_code_check CHECK (
+    delivery_issue_code IS NULL OR delivery_issue_code IN ('customer_unavailable','address_problem','customer_requested_reschedule','safety_issue','other')
+  );
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
 
-ALTER TABLE products
-ADD CONSTRAINT products_image_url_format CHECK (
-  image_url IS NULL OR
-  image_url ~ '^data:image/(jpeg|png|webp);base64,[A-Za-z0-9+/=]+$'
-);
+CREATE INDEX IF NOT EXISTS orders_open_delivery_issue_idx
+  ON orders(delivery_issue_reported_at DESC)
+  WHERE delivery_issue_code IS NOT NULL AND status='picked_up';
