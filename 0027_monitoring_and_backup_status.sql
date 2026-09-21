@@ -1,33 +1,56 @@
-CREATE TABLE IF NOT EXISTS system_events (
-  id bigserial PRIMARY KEY,
-  severity text NOT NULL CHECK (severity IN ('info','warning','error','critical')),
-  category text NOT NULL,
-  code text NOT NULL,
-  route text,
-  method text,
-  http_status integer CHECK (http_status IS NULL OR http_status BETWEEN 100 AND 599),
-  metadata jsonb NOT NULL DEFAULT '{}',
-  created_at timestamptz NOT NULL DEFAULT now()
-);
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS refunded_at timestamptz;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS refund_reason text;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS refunded_by uuid REFERENCES users(id);
 
-CREATE INDEX IF NOT EXISTS system_events_created_idx ON system_events(created_at DESC);
-CREATE INDEX IF NOT EXISTS system_events_severity_idx ON system_events(severity, created_at DESC);
-
-CREATE TABLE IF NOT EXISTS manual_backup_records (
+CREATE TABLE IF NOT EXISTS order_refunds (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  backup_name text NOT NULL,
-  tables_count integer CHECK (tables_count IS NULL OR tables_count >= 0),
-  rows_count integer CHECK (rows_count IS NULL OR rows_count >= 0),
-  backup_size_bytes bigint CHECK (backup_size_bytes IS NULL OR backup_size_bytes >= 0),
-  sha256 text CHECK (sha256 IS NULL OR sha256 ~ '^[0-9a-f]{64}$'),
-  confirmed_by uuid NOT NULL REFERENCES users(id),
+  order_id uuid NOT NULL UNIQUE REFERENCES orders(id),
+  amount numeric(12,2) NOT NULL CHECK(amount > 0),
+  reason text NOT NULL CHECK(length(reason) >= 3),
+  refund_channel text NOT NULL DEFAULT 'cash_by_admin' CHECK(refund_channel IN ('cash_by_admin','original_payment_method')),
+  created_by uuid NOT NULL REFERENCES users(id),
   created_at timestamptz NOT NULL DEFAULT now()
 );
 
-CREATE INDEX IF NOT EXISTS manual_backup_records_created_idx ON manual_backup_records(created_at DESC);
+ALTER TABLE merchant_wallet_entries DROP CONSTRAINT IF EXISTS merchant_wallet_entries_entry_type_check;
+ALTER TABLE merchant_wallet_entries ADD CONSTRAINT merchant_wallet_entries_entry_type_check
+CHECK(entry_type IN ('order_earning','settlement','refund_reversal'));
+ALTER TABLE merchant_wallet_entries DROP CONSTRAINT IF EXISTS merchant_wallet_entries_order_id_key;
+CREATE UNIQUE INDEX IF NOT EXISTS merchant_wallet_entries_order_type_unique
+ON merchant_wallet_entries(order_id,entry_type) WHERE order_id IS NOT NULL;
 
-ALTER TABLE system_events ENABLE ROW LEVEL SECURITY;
-ALTER TABLE manual_backup_records ENABLE ROW LEVEL SECURITY;
+ALTER TABLE rider_wallet_entries DROP CONSTRAINT IF EXISTS rider_wallet_entries_entry_type_check;
+ALTER TABLE rider_wallet_entries ADD CONSTRAINT rider_wallet_entries_entry_type_check
+CHECK(entry_type IN ('delivery_earning','withdrawal','cash_collection','cash_remittance','delivery_refund_reversal','cash_refund_reversal'));
 
-COMMENT ON TABLE system_events IS 'PII-free operational events for launch monitoring';
-COMMENT ON TABLE manual_backup_records IS 'Administrative confirmations of encrypted manual backups';
+CREATE INDEX IF NOT EXISTS order_refunds_created_idx ON order_refunds(created_at DESC);
+ALTER TABLE order_refunds ENABLE ROW LEVEL SECURITY;
+
+CREATE OR REPLACE FUNCTION mark_refunded_order_cancelled() RETURNS trigger AS $$
+BEGIN
+  IF NEW.refunded_at IS NOT NULL AND OLD.refunded_at IS NULL THEN
+    NEW.status='cancelled';
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS orders_refund_status_trigger ON orders;
+CREATE TRIGGER orders_refund_status_trigger
+BEFORE UPDATE OF refunded_at ON orders
+FOR EACH ROW EXECUTE FUNCTION mark_refunded_order_cancelled();
+
+CREATE OR REPLACE FUNCTION record_refunded_order_event() RETURNS trigger AS $$
+BEGIN
+  IF NEW.refunded_at IS NOT NULL AND OLD.refunded_at IS NULL THEN
+    INSERT INTO order_events(order_id,actor_user_id,status,note)
+    VALUES(NEW.id,NEW.refunded_by,'cancelled','استرداد كامل: '||COALESCE(NEW.refund_reason,'سبب غير مسجل'));
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS orders_refund_event_trigger ON orders;
+CREATE TRIGGER orders_refund_event_trigger
+AFTER UPDATE OF refunded_at ON orders
+FOR EACH ROW EXECUTE FUNCTION record_refunded_order_event();
