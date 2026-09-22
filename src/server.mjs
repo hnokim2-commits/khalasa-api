@@ -109,6 +109,11 @@ async function assignOrderToRider(client,{orderId,riderId,actorUserId,cityId=nul
   const rider=riderResult.rows[0];
   if(rider.city_id!==order.city_id||(cityId&&rider.city_id!==cityId))throw operationalError('RIDER_NOT_AVAILABLE_IN_ORDER_CITY');
   if(order.rider_id===rider.id&&order.status==='assigned')return{order,rider,replayed:true,bundled:false,policy:routePolicyFor(rider.vehicle_type)};
+  // Remove terminal stops left behind by cancelled or delivered orders before
+  // allocating a sequence in the rider's active trip. Otherwise a stale stop
+  // can collide with UNIQUE(trip_id, pickup_sequence) and surface as 23505.
+  await client.query(`DELETE FROM delivery_trip_orders dto USING delivery_trips t,orders finished WHERE dto.trip_id=t.id AND dto.order_id=finished.id AND t.rider_id=$1 AND t.status='active' AND finished.status IN ('delivered','cancelled')`,[rider.id]);
+  await client.query(`UPDATE delivery_trips t SET status='completed',completed_at=now() WHERE t.rider_id=$1 AND t.status='active' AND NOT EXISTS(SELECT 1 FROM delivery_trip_orders dto WHERE dto.trip_id=t.id)`,[rider.id]);
   const activeResult=await client.query(`SELECT o.id,o.status,o.delivery_lat,o.delivery_lng,m.lat merchant_lat,m.lng merchant_lng FROM orders o JOIN merchants m ON m.id=o.merchant_id WHERE o.rider_id=$1 AND o.status IN ('assigned','picked_up') AND o.id<>$2 ORDER BY o.created_at FOR UPDATE OF o`,[rider.id,order.id]);
   const compatibility=routeCompatibility(activeResult.rows,order,rider.vehicle_type);
   if(!compatibility.compatible)throw operationalError(compatibility.reason,409,{policy:compatibility.policy,pickupDistanceKm:compatibility.pickupDistanceKm,deliveryDistanceKm:compatibility.deliveryDistanceKm});
@@ -118,8 +123,11 @@ async function assignOrderToRider(client,{orderId,riderId,actorUserId,cityId=nul
   }
   let trip=await client.query(`SELECT id FROM delivery_trips WHERE rider_id=$1 AND status='active' FOR UPDATE`,[rider.id]);
   if(!trip.rowCount)trip=await client.query(`INSERT INTO delivery_trips(rider_id,vehicle_type) VALUES($1,$2) RETURNING id`,[rider.id,rider.vehicle_type]);
-  const sequence=activeResult.rowCount+1;
-  await client.query(`INSERT INTO delivery_trip_orders(trip_id,order_id,pickup_sequence,delivery_sequence) VALUES($1,$2,$3,$3) ON CONFLICT(order_id) DO UPDATE SET trip_id=excluded.trip_id,pickup_sequence=excluded.pickup_sequence,delivery_sequence=excluded.delivery_sequence`,[trip.rows[0].id,order.id,sequence]);
+  await client.query(`DELETE FROM delivery_trip_orders WHERE order_id=$1`,[order.id]);
+  const sequenceResult=await client.query(`SELECT COALESCE(MAX(GREATEST(pickup_sequence,delivery_sequence)),0)::int+1 sequence FROM delivery_trip_orders WHERE trip_id=$1`,[trip.rows[0].id]);
+  const sequence=Number(sequenceResult.rows[0].sequence);
+  if(sequence>compatibility.policy.capacity)throw operationalError('RIDER_ROUTE_CAPACITY_REACHED');
+  await client.query(`INSERT INTO delivery_trip_orders(trip_id,order_id,pickup_sequence,delivery_sequence) VALUES($1,$2,$3,$3)`,[trip.rows[0].id,order.id,sequence]);
   await client.query(`UPDATE orders SET rider_id=$1,status='assigned',updated_at=now() WHERE id=$2`,[rider.id,order.id]);
   const note=activeResult.rowCount?`${notePrefix} ضمن رحلة مجمعة إلى ${rider.full_name}`:`${notePrefix} إلى ${rider.full_name}`;
   await client.query(`INSERT INTO order_events(order_id,actor_user_id,status,note) VALUES($1,$2,'assigned',$3)`,[order.id,actorUserId,note]);
@@ -366,7 +374,7 @@ app.post('/v1/orders/:id/deliver', auth('rider'), asyncRoute(async (req,res) => 
     const delivered=await client.query(`WITH delivered AS (UPDATE orders SET status='delivered',updated_at=now() WHERE id=$1 AND status='picked_up' RETURNING id,rider_id,merchant_id,city_id,delivery_fee,merchant_payout,merchandise_total,payment_method,public_code,city_admin_share,headquarters_share),rider_credit AS (INSERT INTO rider_wallet_entries(rider_id,order_id,entry_type,amount,description) SELECT rider_id,id,'delivery_earning',delivery_fee,'أجرة توصيل الطلب '||public_code FROM delivered ON CONFLICT(order_id,entry_type) WHERE order_id IS NOT NULL DO NOTHING),cash_debit AS (INSERT INTO rider_wallet_entries(rider_id,order_id,entry_type,amount,description) SELECT rider_id,id,'cash_collection',-(merchandise_total+delivery_fee),'تحصيل نقدي من العميل للطلب '||public_code FROM delivered WHERE payment_method='cod' ON CONFLICT(order_id,entry_type) WHERE order_id IS NOT NULL DO NOTHING),merchant_credit AS (INSERT INTO merchant_wallet_entries(merchant_id,order_id,entry_type,amount,description) SELECT merchant_id,id,'order_earning',merchant_payout,'مستحق الطلب '||public_code FROM delivered ON CONFLICT(order_id) DO NOTHING),city_credit AS (INSERT INTO administration_revenue_entries(order_id,city_id,beneficiary,amount,description) SELECT id,city_id,'city',city_admin_share,'حصة إدارة المدينة من الطلب '||public_code FROM delivered WHERE city_admin_share>0 ON CONFLICT DO NOTHING),headquarters_credit AS (INSERT INTO administration_revenue_entries(order_id,city_id,beneficiary,amount,description) SELECT id,city_id,'headquarters',headquarters_share,'حصة الإدارة الرئيسية من الطلب '||public_code FROM delivered WHERE headquarters_share>0 ON CONFLICT DO NOTHING) SELECT id,rider_id FROM delivered`,[current.id]);
     if(!delivered.rowCount)throw operationalError('INVALID_ORDER_TRANSITION');
     await client.query(`INSERT INTO order_events(order_id,actor_user_id,status,note) VALUES($1,$2,'delivered','تم التسليم برمز العميل')`,[current.id,req.user.sub]);
-    await client.query(`UPDATE delivery_trips t SET status='completed',completed_at=now() WHERE t.status='active' AND t.rider_id=$1 AND NOT EXISTS(SELECT 1 FROM delivery_trip_orders dto JOIN orders o ON o.id=dto.order_id WHERE dto.trip_id=t.id AND o.status<>'delivered')`,[current.rider_id]);
+    await client.query(`UPDATE delivery_trips t SET status='completed',completed_at=now() WHERE t.status='active' AND t.rider_id=$1 AND NOT EXISTS(SELECT 1 FROM delivery_trip_orders dto JOIN orders o ON o.id=dto.order_id WHERE dto.trip_id=t.id AND o.status NOT IN ('delivered','cancelled'))`,[current.rider_id]);
     await client.query('COMMIT');
     res.json({ok:true});
   }catch(error){await client.query('ROLLBACK');throw error;}finally{client.release();}
