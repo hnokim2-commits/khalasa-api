@@ -39,6 +39,24 @@ function publishRealtime(){const payload=`event: update\ndata: ${JSON.stringify(
 app.use((req,res,next)=>{res.on('finish',()=>{if(res.statusCode>=200&&res.statusCode<300&&['POST','PATCH','PUT','DELETE'].includes(req.method)&&/^\/v1\/(orders|customer\/orders|admin\/orders|city-admin\/orders|rider\/(availability|profile)|merchant\/(profile|products))/.test(req.path))publishRealtime(req.path);});next();});
 
 const asyncRoute = handler => (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next);
+function validStaffAccessCode(value,phone='') {
+  const code=String(value||'').trim(),normalizedPhone=String(phone||'').replace(/\s+/g,'');
+  if(code.length<10||code.length>128||code===normalizedPhone)return false;
+  if(/^(.)\1+$/.test(code))return false;
+  if(['0123456789','1234567890','0987654321','0000000000'].includes(code))return false;
+  return true;
+}
+app.use((req,res,next)=>{
+  if(req.method==='POST'&&req.path==='/v1/staff/login'&&ownerPhone&&ownerAccessCode&&!validStaffAccessCode(ownerAccessCode,ownerPhone))return res.status(503).json({error:'OWNER_CREDENTIAL_POLICY_REQUIRED'});
+  next();
+});
+app.use((req,res,next)=>{
+  if(req.method!=='POST'||!['/v1/admin/main-users','/v1/admin/city-users'].includes(req.path))return next();
+  return auth('admin')(req,res,()=>{
+    if(!validStaffAccessCode(req.body?.accessCode,req.body?.phone))return res.status(400).json({error:'WEAK_STAFF_ACCESS_CODE'});
+    next();
+  });
+});
 function rateLimit({ limit = 5, windowMs = 10 * 60 * 1000, key = req => req.ip }) {
   return asyncRoute(async(req,res,next)=>{
     const rawKey=`${req.path}:${key(req)}`;
