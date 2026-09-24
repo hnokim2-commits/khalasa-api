@@ -69,18 +69,19 @@ function rateLimit({ limit = 5, windowMs = 10 * 60 * 1000, key = req => req.ip }
 }
 const authRateLimit = rateLimit({ limit: 8, key: req => `${req.ip}:${String(req.body?.phone || '')}` });
 app.use((req, res, next) => ['/v1/staff/login', '/v1/partner/login', '/v1/partner/recovery-requests', '/v1/auth/request-otp', '/v1/auth/verify-otp'].includes(req.path) ? authRateLimit(req, res, next) : next());
+function isProtectedFinancialWrite(req){return req.method==='POST'&&(['/v1/rider/wallet/withdrawals','/v1/merchant/wallet/settlements'].includes(req.path)||/^\/v1\/admin\/riders\/[0-9a-f-]{36}\/cash-remittances$/i.test(req.path));}
 app.use((req,res,next)=>{
-  if(req.method!=='POST'||!['/v1/rider/wallet/withdrawals','/v1/merchant/wallet/settlements'].includes(req.path))return next();
+  if(!isProtectedFinancialWrite(req))return next();
   const raw=Number(req.body?.amount),rounded=Math.round(raw*100)/100;
   if(!Number.isFinite(raw)||raw<=0||raw>1000000||Math.abs(raw-rounded)>.000001)return res.status(400).json({error:'INVALID_FINANCIAL_AMOUNT'});
   req.body.amount=rounded;
   next();
 });
 app.use(asyncRoute(async(req,res,next)=>{
-  if(req.method!=='POST'||!['/v1/rider/wallet/withdrawals','/v1/merchant/wallet/settlements'].includes(req.path))return next();
+  if(!isProtectedFinancialWrite(req))return next();
   const requestKey=String(req.headers['x-idempotency-key']||'');
   if(!/^[A-Za-z0-9_-]{16,100}$/.test(requestKey))return res.status(400).json({error:'IDEMPOTENCY_KEY_REQUIRED'});
-  const operation=req.path.includes('/rider/')?'rider_withdrawal':'merchant_settlement';
+  const operation=req.path.includes('/cash-remittances')?'rider_cash_remittance':req.path.includes('/rider/')?'rider_withdrawal':'merchant_settlement';
   const identity=String(req.headers.authorization||'');
   const bucketKey=crypto.createHmac('sha256',process.env.RATE_LIMIT_SECRET||process.env.JWT_SECRET).update(`${operation}:${identity}:${requestKey}`).digest('hex');
   const claimed=await pool.query(`INSERT INTO financial_request_keys(bucket_key,operation) VALUES($1,$2) ON CONFLICT(bucket_key) DO NOTHING RETURNING bucket_key`,[bucketKey,operation]);
