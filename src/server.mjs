@@ -58,6 +58,18 @@ app.use((req,res,next)=>{
   req.body.amount=rounded;
   next();
 });
+app.use(asyncRoute(async(req,res,next)=>{
+  if(req.method!=='POST'||!['/v1/rider/wallet/withdrawals','/v1/merchant/wallet/settlements'].includes(req.path))return next();
+  const requestKey=String(req.headers['x-idempotency-key']||'');
+  if(!/^[A-Za-z0-9_-]{16,100}$/.test(requestKey))return res.status(400).json({error:'IDEMPOTENCY_KEY_REQUIRED'});
+  const operation=req.path.includes('/rider/')?'rider_withdrawal':'merchant_settlement';
+  const identity=String(req.headers.authorization||'');
+  const bucketKey=crypto.createHmac('sha256',process.env.RATE_LIMIT_SECRET||process.env.JWT_SECRET).update(`${operation}:${identity}:${requestKey}`).digest('hex');
+  const claimed=await pool.query(`INSERT INTO financial_request_keys(bucket_key,operation) VALUES($1,$2) ON CONFLICT(bucket_key) DO NOTHING RETURNING bucket_key`,[bucketKey,operation]);
+  if(!claimed.rowCount)return res.status(409).json({error:'FINANCIAL_REQUEST_ALREADY_SUBMITTED'});
+  res.on('finish',()=>{if(res.statusCode>=400)void pool.query('DELETE FROM financial_request_keys WHERE bucket_key=$1',[bucketKey]).catch(()=>{});});
+  next();
+}));
 const cleanupTimer=setInterval(()=>pool.query(`DELETE FROM request_rate_limits WHERE reset_at<now()-interval '1 hour'`).catch(()=>{}),60*60*1000);
 cleanupTimer.unref();
 
