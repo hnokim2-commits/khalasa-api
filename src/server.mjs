@@ -51,6 +51,13 @@ function rateLimit({ limit = 5, windowMs = 10 * 60 * 1000, key = req => req.ip }
 }
 const authRateLimit = rateLimit({ limit: 8, key: req => `${req.ip}:${String(req.body?.phone || '')}` });
 app.use((req, res, next) => ['/v1/staff/login', '/v1/partner/login', '/v1/partner/recovery-requests', '/v1/auth/request-otp', '/v1/auth/verify-otp'].includes(req.path) ? authRateLimit(req, res, next) : next());
+app.use((req,res,next)=>{
+  if(req.method!=='POST'||!['/v1/rider/wallet/withdrawals','/v1/merchant/wallet/settlements'].includes(req.path))return next();
+  const raw=Number(req.body?.amount),rounded=Math.round(raw*100)/100;
+  if(!Number.isFinite(raw)||raw<=0||raw>1000000||Math.abs(raw-rounded)>.000001)return res.status(400).json({error:'INVALID_FINANCIAL_AMOUNT'});
+  req.body.amount=rounded;
+  next();
+});
 const cleanupTimer=setInterval(()=>pool.query(`DELETE FROM request_rate_limits WHERE reset_at<now()-interval '1 hour'`).catch(()=>{}),60*60*1000);
 cleanupTimer.unref();
 
