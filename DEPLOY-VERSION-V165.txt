@@ -1,0 +1,3 @@
+Khalasa Investor Roles and Permissions API V165
+
+Adds granular investor feature permissions while preserving owner compatibility.

@@ -34,6 +34,27 @@ app.use((_req, res, next) => {
   next();
 });
 
+// V165: enforce feature-specific investor permissions before the legacy route handlers.
+const investorFeaturePermissions=[
+  [/^\/v1\/investor\/reports\//,'reports.read'],
+  [/^\/v1\/investor\/kpi-/,'kpi.manage'],
+  [/^\/v1\/investor\/tasks(?:\/|$)/,'tasks.manage'],
+  [/^\/v1\/investor\/notifications(?:\/|$)/,'notifications.manage'],
+  [/^\/v1\/investor\/activity-log(?:\/|$)/,'activity.read'],
+  [/^\/v1\/investor\/departments(?:\/|$)/,'departments.manage']
+];
+app.use('/v1/investor',(req,res,next)=>{
+  const rule=investorFeaturePermissions.find(([pattern])=>pattern.test(req.originalUrl));
+  if(!rule)return next();
+  return auth('investor')(req,res,()=>asyncRoute(async(_req,_res,_next)=>{
+    const access=await pool.query('SELECT permissions,scope_all_departments FROM investor_user_assignments WHERE user_id=$1 AND is_active=true',[req.user.sub]);
+    if(!access.rowCount)return res.status(403).json({error:'INVESTOR_ACCESS_DISABLED'});
+    const assignment=access.rows[0],owner=assignment.scope_all_departments&&assignment.permissions?.['users.manage']===true;
+    if(!owner&&assignment.permissions?.[rule[1]]!==true)return res.status(403).json({error:'INVESTOR_PERMISSION_REQUIRED',permissions:[rule[1]]});
+    next();
+  })(req,res,next));
+});
+
 const realtimeClients=new Set();
 function publishRealtime(){const payload=`event: update\ndata: ${JSON.stringify({type:'data_changed',at:new Date().toISOString()})}\n\n`;for(const client of realtimeClients){try{client.write(payload);}catch{realtimeClients.delete(client);}}}
 app.use((req,res,next)=>{res.on('finish',()=>{if(res.statusCode>=200&&res.statusCode<300&&['POST','PATCH','PUT','DELETE'].includes(req.method)&&/^\/v1\/(orders|customer\/orders|admin\/orders|city-admin\/orders|rider\/(availability|profile)|merchant\/(profile|products))/.test(req.path))publishRealtime(req.path);});next();});
@@ -138,7 +159,7 @@ function cityPermission(...permissions) { return asyncRoute(async (req, res, nex
   req.cityScope = assignment;
   next();
 }); }
-const investorPermissions=['dashboard.read','orders.read','finance.read','cities.read','users.manage'];
+const investorPermissions=['dashboard.read','orders.read','finance.read','cities.read','reports.read','kpi.manage','tasks.manage','notifications.manage','departments.manage','users.manage','activity.read'];
 function normalizeInvestorPermissions(value={}){return Object.fromEntries(investorPermissions.map(key=>[key,value[key]===true]));}
 const businessTimeZone=process.env.BUSINESS_TIME_ZONE||'Asia/Riyadh';
 function businessDate(){const parts=new Intl.DateTimeFormat('en-US',{timeZone:businessTimeZone,year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date()),part=type=>parts.find(item=>item.type===type)?.value;return `${part('year')}-${part('month')}-${part('day')}`;}
