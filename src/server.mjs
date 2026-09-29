@@ -165,8 +165,59 @@ const businessTimeZone=process.env.BUSINESS_TIME_ZONE||'Asia/Riyadh';
 function businessDate(){const parts=new Intl.DateTimeFormat('en-US',{timeZone:businessTimeZone,year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date()),part=type=>parts.find(item=>item.type===type)?.value;return `${part('year')}-${part('month')}-${part('day')}`;}
 function dateOnly(value){if(!value)return '';if(value instanceof Date)return value.toISOString().slice(0,10);const match=String(value).match(/\d{4}-\d{2}-\d{2}/);return match?.[0]||'';}
 function investorContractError(scope){const today=businessDate(),start=dateOnly(scope.contract_start),end=dateOnly(scope.contract_end);if(scope.status!=='active')return 'INVESTOR_NOT_ACTIVE';if(start&&start>today)return 'INVESTOR_CONTRACT_NOT_STARTED';if(end&&end<today)return 'INVESTOR_CONTRACT_EXPIRED';return '';}
-function investorPermission(...permissions){return asyncRoute(async(req,res,next)=>{const result=await pool.query(`SELECT a.investor_id,a.permissions,a.job_title,a.scope_all_departments,i.trade_name,i.legal_name,i.status,i.contract_start,i.contract_end,c.is_active credential_active FROM investor_user_assignments a JOIN investor_organizations i ON i.id=a.investor_id JOIN investor_credentials c ON c.user_id=a.user_id WHERE a.user_id=$1 AND a.is_active=true`,[req.user.sub]);if(!result.rowCount||!result.rows[0].credential_active)return res.status(403).json({error:'INVESTOR_ACCESS_DISABLED'});const scope=result.rows[0],contractError=investorContractError(scope);if(contractError)return res.status(403).json({error:contractError});if(permissions.length&&!permissions.some(permission=>scope.permissions?.[permission]===true))return res.status(403).json({error:'INVESTOR_PERMISSION_REQUIRED',permissions});const assigned=scope.scope_all_departments?{rows:[]}:await pool.query(`SELECT DISTINCT d.id department_id,d.city_id FROM investor_department_users du JOIN investor_departments d ON d.id=du.department_id AND d.investor_id=$2 AND d.is_active=true WHERE du.user_id=$1 AND du.is_active=true`,[req.user.sub,scope.investor_id]);scope.department_ids=assigned.rows.map(row=>row.department_id);scope.allowed_city_ids=assigned.rows.map(row=>row.city_id);req.investorScope=scope;next();});}
+function investorPermission(...permissions){return asyncRoute(async(req,res,next)=>{
+  const result=await pool.query(`SELECT a.investor_id,a.permissions,a.job_title,a.scope_all_departments,i.trade_name,i.legal_name,i.status,i.contract_start,i.contract_end,c.is_active credential_active FROM investor_user_assignments a JOIN investor_organizations i ON i.id=a.investor_id JOIN investor_credentials c ON c.user_id=a.user_id WHERE a.user_id=$1 AND a.is_active=true`,[req.user.sub]);
+  if(!result.rowCount||!result.rows[0].credential_active)return res.status(403).json({error:'INVESTOR_ACCESS_DISABLED'});
+  const scope=result.rows[0],contractError=investorContractError(scope);
+  if(contractError)return res.status(403).json({error:contractError});
+  if(permissions.length&&!permissions.some(permission=>scope.permissions?.[permission]===true))return res.status(403).json({error:'INVESTOR_PERMISSION_REQUIRED',permissions});
+  if(scope.scope_all_departments){scope.department_ids=[];scope.allowed_city_ids=[];}
+  else{
+    const [departments,cities]=await Promise.all([
+      pool.query(`SELECT DISTINCT d.id department_id,d.city_id FROM investor_department_users du JOIN investor_departments d ON d.id=du.department_id AND d.investor_id=$2 AND d.is_active=true WHERE du.user_id=$1 AND du.is_active=true`,[req.user.sub,scope.investor_id]),
+      pool.query(`SELECT city_id FROM investor_user_city_scopes WHERE user_id=$1 AND investor_id=$2`,[req.user.sub,scope.investor_id])
+    ]);
+    scope.department_ids=departments.rows.map(row=>row.department_id);
+    scope.allowed_city_ids=[...new Set([...departments.rows.map(row=>row.city_id),...cities.rows.map(row=>row.city_id)])];
+  }
+  req.investorScope=scope;next();
+});}
 function investorOwner(req,res,next){if(!req.investorScope?.scope_all_departments)return res.status(403).json({error:'INVESTOR_OWNER_REQUIRED'});next();}
+
+app.get('/v1/investor/users/:userId/access-scope',auth('investor'),investorPermission('users.manage'),investorOwner,asyncRoute(async(req,res)=>{
+  const investorId=req.investorScope.investor_id,targetId=req.params.userId;
+  const assignment=await pool.query('SELECT user_id,scope_all_departments FROM investor_user_assignments WHERE user_id=$1 AND investor_id=$2',[targetId,investorId]);
+  if(!assignment.rowCount)return res.status(404).json({error:'INVESTOR_USER_NOT_FOUND'});
+  const [cities,departments,selectedCities,selectedDepartments]=await Promise.all([
+    pool.query(`SELECT c.id,c.name,c.governorate FROM investor_city_assignments a JOIN cities c ON c.id=a.city_id WHERE a.investor_id=$1 ORDER BY c.governorate,c.name`,[investorId]),
+    pool.query(`SELECT d.id,d.name,d.city_id,c.name city_name,c.governorate FROM investor_departments d JOIN cities c ON c.id=d.city_id WHERE d.investor_id=$1 AND d.is_active=true ORDER BY c.governorate,c.name,d.name`,[investorId]),
+    pool.query('SELECT city_id FROM investor_user_city_scopes WHERE investor_id=$1 AND user_id=$2',[investorId,targetId]),
+    pool.query('SELECT department_id FROM investor_department_users WHERE user_id=$1 AND is_active=true AND department_id IN (SELECT id FROM investor_departments WHERE investor_id=$2)',[targetId,investorId])
+  ]);
+  res.json({scopeAll:assignment.rows[0].scope_all_departments,cities:cities.rows,departments:departments.rows,cityIds:selectedCities.rows.map(row=>row.city_id),departmentIds:selectedDepartments.rows.map(row=>row.department_id)});
+}));
+
+app.put('/v1/investor/users/:userId/access-scope',auth('investor'),investorPermission('users.manage'),investorOwner,asyncRoute(async(req,res)=>{
+  const investorId=req.investorScope.investor_id,targetId=req.params.userId,scopeAll=req.body.scopeAll===true,uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  const cityIds=[...new Set(Array.isArray(req.body.cityIds)?req.body.cityIds.map(String):[])],departmentIds=[...new Set(Array.isArray(req.body.departmentIds)?req.body.departmentIds.map(String):[])];
+  if(targetId===req.user.sub)return res.status(409).json({error:'CANNOT_CHANGE_OWNER_SCOPE'});
+  if(cityIds.length>100||departmentIds.length>100||cityIds.some(id=>!uuid.test(id))||departmentIds.some(id=>!uuid.test(id)))return res.status(400).json({error:'INVALID_INVESTOR_ACCESS_SCOPE'});
+  const target=await pool.query('SELECT 1 FROM investor_user_assignments WHERE user_id=$1 AND investor_id=$2',[targetId,investorId]);
+  if(!target.rowCount)return res.status(404).json({error:'INVESTOR_USER_NOT_FOUND'});
+  if(cityIds.length){const allowed=await pool.query('SELECT count(*)::int count FROM investor_city_assignments WHERE investor_id=$1 AND city_id=ANY($2::uuid[])',[investorId,cityIds]);if(allowed.rows[0].count!==cityIds.length)return res.status(403).json({error:'CITY_OUTSIDE_INVESTOR_SCOPE'});}
+  if(departmentIds.length){const allowed=await pool.query('SELECT count(*)::int count FROM investor_departments WHERE investor_id=$1 AND id=ANY($2::uuid[])',[investorId,departmentIds]);if(allowed.rows[0].count!==departmentIds.length)return res.status(403).json({error:'DEPARTMENT_OUTSIDE_INVESTOR_SCOPE'});}
+  const client=await pool.connect();try{
+    await client.query('BEGIN');
+    await client.query('UPDATE investor_user_assignments SET scope_all_departments=$1,updated_at=now() WHERE user_id=$2 AND investor_id=$3',[scopeAll,targetId,investorId]);
+    await client.query('DELETE FROM investor_user_city_scopes WHERE investor_id=$1 AND user_id=$2',[investorId,targetId]);
+    for(const cityId of scopeAll?[]:cityIds)await client.query('INSERT INTO investor_user_city_scopes(investor_id,user_id,city_id,assigned_by) VALUES($1,$2,$3,$4)',[investorId,targetId,cityId,req.user.sub]);
+    await client.query(`UPDATE investor_department_users SET is_active=false,updated_at=now() WHERE user_id=$1 AND department_id IN (SELECT id FROM investor_departments WHERE investor_id=$2)`,[targetId,investorId]);
+    for(const departmentId of scopeAll?[]:departmentIds)await client.query(`INSERT INTO investor_department_users(department_id,user_id,assigned_by) VALUES($1,$2,$3) ON CONFLICT(department_id,user_id) DO UPDATE SET is_active=true,assigned_by=excluded.assigned_by,updated_at=now()`,[departmentId,targetId,req.user.sub]);
+    await client.query('UPDATE users SET session_version=session_version+1,updated_at=now() WHERE id=$1',[targetId]);
+    await client.query(`INSERT INTO admin_audit_log(actor_user_id,target_user_id,action,details) VALUES($1,$2,'investor.employee_scope_updated',$3::jsonb)`,[req.user.sub,targetId,JSON.stringify({investorId,scopeAll,cityIds:scopeAll?[]:cityIds,departmentIds:scopeAll?[]:departmentIds})]);
+    await client.query('COMMIT');res.json({ok:true,scopeAll,cityIds:scopeAll?[]:cityIds,departmentIds:scopeAll?[]:departmentIds});
+  }catch(error){await client.query('ROLLBACK');throw error}finally{client.release()}
+}));
 app.use(/^\/v1\/admin\/investors\/[^/]+\/users$/,asyncRoute(async(req,res,next)=>{if(req.method!=='POST')return next();return auth('admin')(req,res,async()=>{const phone=String(req.body?.phone||'').trim().replace(/\s+/g,''),investorId=/\/v1\/admin\/investors\/([^/]+)\/users/.exec(req.originalUrl)?.[1];if(!phone||!investorId)return next();const existing=await pool.query(`SELECT a.investor_id FROM users u JOIN investor_user_assignments a ON a.user_id=u.id WHERE u.phone=$1`,[phone]);if(existing.rowCount&&existing.rows[0].investor_id!==investorId)return res.status(409).json({error:'INVESTOR_USER_TENANT_CHANGE_FORBIDDEN'});next();});}));
 function transitionAllowed(from, to) { return ({ awaiting_merchant:['preparing','cancelled'], preparing:['awaiting_rider','cancelled'], awaiting_rider:['assigned','cancelled'], assigned:['picked_up','cancelled'], picked_up:['delivered'], delivered:[], cancelled:[] })[from]?.includes(to); }
 function operationalError(code,status=409,details={}){const error=new Error(code);error.status=status;error.code=code;error.details=details;return error;}
