@@ -313,6 +313,27 @@ async function deliverOtp({ phone, email }, otp) {
 }
 
 app.get('/health', asyncRoute(async (_req, res) => { const started=Date.now();const result=await pool.query('SELECT now() server_time');res.json({ok:true,service:'khalasa-api',version:'v77',database:'ok',ownerLoginConfigured:/^01\d{9}$/.test(ownerPhone)&&ownerAccessCode.length>=8,timestamp:result.rows[0].server_time,uptimeSeconds:Math.floor(process.uptime()),dbLatencyMs:Date.now()-started}); }));
+app.get('/v1/admin/monitoring/readiness',auth('admin'),asyncRoute(async(_req,res)=>{
+  const started=Date.now();
+  const [database,connections,events,backup,migrations]=await Promise.all([
+    pool.query(`SELECT pg_database_size(current_database())::bigint database_size_bytes,current_database() database_name,now() server_time`),
+    pool.query(`SELECT count(*)::int total,count(*) FILTER(WHERE state='active')::int active,count(*) FILTER(WHERE wait_event IS NOT NULL)::int waiting FROM pg_stat_activity WHERE datname=current_database()`),
+    pool.query(`SELECT count(*) FILTER(WHERE severity IN ('error','critical'))::int errors_24h,count(*) FILTER(WHERE severity='warning')::int warnings_24h,count(*) FILTER(WHERE created_at>=now()-interval '1 hour' AND severity IN ('error','critical'))::int errors_1h FROM system_events WHERE created_at>=now()-interval '24 hours'`),
+    pool.query(`SELECT backup_name,created_at,EXTRACT(EPOCH FROM(now()-created_at))/3600 age_hours FROM manual_backup_records ORDER BY created_at DESC LIMIT 1`),
+    pool.query(`SELECT count(*)::int count,max(name) latest FROM schema_migrations`)
+  ]);
+  const services={
+    database:true,
+    cors:allowedOrigins.length>0,
+    rateLimit:!!process.env.RATE_LIMIT_SECRET,
+    otp:!!(process.env.OTP_PROVIDER||process.env.RESEND_API_KEY||process.env.OTP_WEBHOOK_URL),
+    whatsapp:!!(process.env.WHATSAPP_ACCESS_TOKEN&&process.env.WHATSAPP_PHONE_NUMBER_ID),
+    documents:!!(process.env.SUPABASE_URL&&process.env.SUPABASE_SERVICE_ROLE_KEY&&process.env.SUPABASE_DOCUMENTS_BUCKET)
+  };
+  const lastBackup=backup.rows[0]||null,checks={databaseLatencyMs:Date.now()-started,backupFresh:lastBackup?Number(lastBackup.age_hours)<=24:false,errorRateHealthy:Number(events.rows[0].errors_1h||0)===0,productionMode:process.env.NODE_ENV==='production',ownerConfigured:/^01\d{9}$/.test(ownerPhone)&&ownerAccessCode.length>=8,...services};
+  const required=['database','cors','rateLimit','backupFresh','errorRateHealthy','productionMode','ownerConfigured'],passed=required.filter(key=>checks[key]===true).length,score=Math.round((passed/required.length)*100);
+  res.json({readiness:{score,state:score>=90?'ready':score>=70?'attention':'not_ready',checks},database:{...database.rows[0],connections:connections.rows[0]},events:events.rows[0],lastBackup,migrations:migrations.rows[0],services,measuredAt:new Date().toISOString()});
+}));
 app.get('/v1/admin/monitoring',auth('admin'),asyncRoute(async(_req,res)=>{const started=Date.now();const [clock,events,eventCounts,orders,applications,backup]=await Promise.all([
   pool.query('SELECT now() server_time'),
   pool.query(`SELECT severity,category,code,route,method,http_status,metadata,created_at FROM system_events ORDER BY created_at DESC LIMIT 30`),
