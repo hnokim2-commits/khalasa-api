@@ -1,0 +1,4 @@
+KHALASA API V173 — RELEASE OBSERVABILITY
+- Health and admin monitoring now report the current release version.
+- Optional Render variable: RELEASE_VERSION=v173
+- Includes all V171 security hardening and V170 backups.
