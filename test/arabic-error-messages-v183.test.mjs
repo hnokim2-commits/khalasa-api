@@ -10,6 +10,13 @@ test('V183 preserves machine error codes and adds Arabic messages',()=>{
   assert.match(source,/message:arabicErrorMessage\(body\.error,res\.statusCode\)/);
 });
 
+test('V184 installs Arabic translation before early request guards',()=>{
+  const translator=source.indexOf('const json=res.json.bind(res)');
+  assert.ok(translator>0);
+  assert.ok(translator<source.indexOf('app.use(cors('));
+  assert.ok(translator<source.indexOf('if(!isDocumentUpload(req))return next()'));
+});
+
 test('V183 covers security and resource errors',()=>{
   for(const code of ['AUTH_REQUIRED','INVALID_TOKEN','SESSION_REVOKED','FORBIDDEN','TOO_MANY_ATTEMPTS','PAYLOAD_TOO_LARGE','UPLOAD_CONCURRENCY_LIMIT'])assert.match(source,new RegExp(`${code}:'[^']*[\\u0600-\\u06FF]`));
 });

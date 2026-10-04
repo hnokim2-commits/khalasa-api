@@ -1,0 +1,2 @@
+KHALASA API V184
+Arabic messages now cover early CORS, payload, content-type and upload guard failures.

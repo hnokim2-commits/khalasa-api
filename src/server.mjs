@@ -15,7 +15,7 @@ const app = express();
 app.disable('x-powered-by');
 if (process.env.NODE_ENV === 'production') app.set('trust proxy', 1);
 const port = Number(process.env.PORT || 8080);
-const releaseVersion = String(process.env.RELEASE_VERSION || 'v183').trim().slice(0,40);
+const releaseVersion = String(process.env.RELEASE_VERSION || 'v184').trim().slice(0,40);
 const commissionRate = Number(process.env.PLATFORM_COMMISSION_RATE || 0.12);
 const allowedOrigins = (process.env.CORS_ORIGINS || '').split(',').map(value=>value.trim().replace(/\/$/, '')).filter(Boolean);
 const databaseSsl = process.env.NODE_ENV === 'production'
@@ -24,6 +24,15 @@ const databaseSsl = process.env.NODE_ENV === 'production'
 const pool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: databaseSsl });
 const ownerPhone=String(process.env.OWNER_PHONE||'').trim().replace(/\s+/g,'');
 const ownerAccessCode=String(process.env.OWNER_ACCESS_CODE||'').trim();
+// Install the response translator before CORS, body parsing and upload guards so early failures are Arabic too.
+app.use((_req,res,next)=>{
+  const json=res.json.bind(res);
+  res.json=body=>{
+    if(body&&typeof body==='object'&&typeof body.error==='string'&&!body.message)body={...body,message:arabicErrorMessage(body.error,res.statusCode)};
+    return json(body);
+  };
+  next();
+});
 app.use(cors({ origin(origin, callback) { if (!origin || allowedOrigins.includes(origin)) return callback(null, true); callback(new Error('CORS_NOT_ALLOWED')); } }));
 const isDocumentUpload=req=>req.method==='POST'&&(/^\/v1\/(rider|merchant)\/documents$/.test(req.path)||/^\/v1\/city-admin\/personnel\/[0-9a-f-]{36}\/documents$/i.test(req.path)||req.path==='/v1/city-admin/treasury/expenses'||/^\/v1\/city-admin\/treasury\/advances\/[0-9a-f-]{36}\/settlements$/i.test(req.path));
 const maxDocumentRequestBytes=6*1024*1024,maxConcurrentDocumentUploads=Math.max(2,Math.min(100,Number(process.env.MAX_CONCURRENT_DOCUMENT_UPLOADS)||20)),maxDocumentUploadsPerIp=Math.max(1,Math.min(10,Number(process.env.MAX_DOCUMENT_UPLOADS_PER_IP)||3));
@@ -72,15 +81,6 @@ function arabicErrorMessage(code,status){
   if(status>=500)return 'حدث عطل مؤقت في الخادم. حاول مرة أخرى بعد قليل.';
   return 'تعذر إكمال الطلب. راجع البيانات وحاول مرة أخرى.';
 }
-app.use((_req,res,next)=>{
-  const json=res.json.bind(res);
-  res.json=body=>{
-    if(body&&typeof body==='object'&&typeof body.error==='string'&&!body.message)body={...body,message:arabicErrorMessage(body.error,res.statusCode)};
-    return json(body);
-  };
-  next();
-});
-
 // V165: enforce feature-specific investor permissions before the legacy route handlers.
 const investorFeaturePermissions=[
   [/^\/v1\/investor\/reports\//,'reports.read'],
