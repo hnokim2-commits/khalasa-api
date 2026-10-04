@@ -1,0 +1,6 @@
+Khalasa API V168 - User lifecycle and themes
+
+- Migration 0058 adds safe user archival and preferences.
+- Staff session revocation endpoint.
+- Safe staff archive and restore endpoints.
+- Authenticated per-user theme preferences.
