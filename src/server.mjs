@@ -15,7 +15,7 @@ const app = express();
 app.disable('x-powered-by');
 if (process.env.NODE_ENV === 'production') app.set('trust proxy', 1);
 const port = Number(process.env.PORT || 8080);
-const releaseVersion = String(process.env.RELEASE_VERSION || 'v182').trim().slice(0,40);
+const releaseVersion = String(process.env.RELEASE_VERSION || 'v183').trim().slice(0,40);
 const commissionRate = Number(process.env.PLATFORM_COMMISSION_RATE || 0.12);
 const allowedOrigins = (process.env.CORS_ORIGINS || '').split(',').map(value=>value.trim().replace(/\/$/, '')).filter(Boolean);
 const databaseSsl = process.env.NODE_ENV === 'production'
@@ -56,6 +56,28 @@ app.use((_req, res, next) => {
     'Cache-Control': 'no-store'
   });
   if (process.env.NODE_ENV === 'production') res.set('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  next();
+});
+const arabicErrorMessages={
+  AUTH_REQUIRED:'يجب تسجيل الدخول أولًا.',INVALID_TOKEN:'انتهت الجلسة أو أصبحت غير صالحة. سجّل الدخول مرة أخرى.',SESSION_REVOKED:'تم إنهاء هذه الجلسة. سجّل الدخول مرة أخرى.',ACCOUNT_DISABLED:'هذا الحساب موقوف حاليًا.',ACCOUNT_NOT_ACTIVE:'هذا الحساب غير نشط حاليًا.',ROLE_REVOKED:'أزيلت صلاحية هذا الحساب.',FORBIDDEN:'ليس لديك صلاحية لتنفيذ هذا الإجراء.',STAFF_PERMISSION_REQUIRED:'ليست لديك الصلاحية المطلوبة.',INVESTOR_PERMISSION_REQUIRED:'ليست لديك صلاحية الوصول إلى هذا القسم.',INVESTOR_ACCESS_DISABLED:'تم إيقاف صلاحية حساب المستثمر.',INVALID_LOGIN:'بيانات الدخول غير صحيحة.',TOO_MANY_ATTEMPTS:'محاولات كثيرة. انتظر قليلًا ثم حاول مرة أخرى.',CORS_NOT_ALLOWED:'مصدر الطلب غير مسموح.',JSON_CONTENT_TYPE_REQUIRED:'يجب إرسال البيانات بصيغة JSON.',PAYLOAD_TOO_LARGE:'حجم الملف أو البيانات أكبر من الحد المسموح.',INVALID_JSON:'صيغة البيانات المرسلة غير صحيحة.',UPLOAD_CAPACITY_REACHED:'الخادم مشغول بعمليات رفع أخرى. حاول بعد قليل.',UPLOAD_CONCURRENCY_LIMIT:'توجد عمليات رفع متعددة من جهازك. انتظر حتى تكتمل.',REALTIME_CAPACITY_REACHED:'خدمة التحديث الفوري مشغولة مؤقتًا.',REALTIME_CONNECTION_LIMIT:'تم بلوغ الحد المسموح لاتصالات التحديث الفوري.',DATABASE_UNAVAILABLE:'قاعدة البيانات غير متاحة مؤقتًا.',SERVICE_UNAVAILABLE:'الخدمة غير متاحة مؤقتًا.',INVALID_DOCUMENT:'المستند غير صالح أو حجمه أو نوعه غير مسموح.',INVALID_EMPLOYMENT_DOCUMENT:'مستند الموظف غير صالح أو غير مكتمل.',INVALID_EXPENSE_RECEIPT:'إيصال المصروف غير صالح.',INVALID_SETTLEMENT_RECEIPT:'إيصال التسوية غير صالح.',DOCUMENT_NOT_FOUND:'لم يتم العثور على المستند.',CITY_REQUIRED:'يجب اختيار المدينة.',INVALID_FINANCIAL_AMOUNT:'المبلغ المدخل غير صحيح.',IDEMPOTENCY_KEY_REQUIRED:'تعذر تأمين العملية المالية. حدّث الصفحة وحاول مرة أخرى.',FINANCIAL_REQUEST_ALREADY_SUBMITTED:'تم إرسال هذه العملية مسبقًا.',INSUFFICIENT_WALLET_BALANCE:'الرصيد غير كافٍ.',INSUFFICIENT_BRANCH_BALANCE:'رصيد خزينة الفرع غير كافٍ.',REQUEST_FAILED:'تعذر إكمال الطلب. حاول مرة أخرى.'
+};
+function arabicErrorMessage(code,status){
+  if(arabicErrorMessages[code])return arabicErrorMessages[code];
+  if(status===401)return 'انتهت الجلسة أو بيانات الدخول غير صحيحة.';
+  if(status===403)return 'ليس لديك صلاحية لتنفيذ هذا الإجراء.';
+  if(status===404)return 'لم يتم العثور على البيانات المطلوبة.';
+  if(status===409)return 'تعذر التنفيذ بسبب تعارض مع الحالة الحالية.';
+  if(status===413)return 'حجم الملف أو البيانات أكبر من الحد المسموح.';
+  if(status===429)return 'محاولات كثيرة. انتظر قليلًا ثم حاول مرة أخرى.';
+  if(status>=500)return 'حدث عطل مؤقت في الخادم. حاول مرة أخرى بعد قليل.';
+  return 'تعذر إكمال الطلب. راجع البيانات وحاول مرة أخرى.';
+}
+app.use((_req,res,next)=>{
+  const json=res.json.bind(res);
+  res.json=body=>{
+    if(body&&typeof body==='object'&&typeof body.error==='string'&&!body.message)body={...body,message:arabicErrorMessage(body.error,res.statusCode)};
+    return json(body);
+  };
   next();
 });
 

@@ -1,0 +1,2 @@
+KHALASA API V183
+Arabic user-facing error messages while preserving internal machine codes.
