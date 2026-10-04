@@ -15,7 +15,7 @@ const app = express();
 app.disable('x-powered-by');
 if (process.env.NODE_ENV === 'production') app.set('trust proxy', 1);
 const port = Number(process.env.PORT || 8080);
-const releaseVersion = String(process.env.RELEASE_VERSION || 'v175').trim().slice(0,40);
+const releaseVersion = String(process.env.RELEASE_VERSION || 'v181').trim().slice(0,40);
 const commissionRate = Number(process.env.PLATFORM_COMMISSION_RATE || 0.12);
 const allowedOrigins = (process.env.CORS_ORIGINS || '').split(',').map(value=>value.trim().replace(/\/$/, '')).filter(Boolean);
 const databaseSsl = process.env.NODE_ENV === 'production'
@@ -60,8 +60,17 @@ app.use('/v1/investor',(req,res,next)=>{
   })(req,res,next));
 });
 
-const realtimeClients=new Set();
-function publishRealtime(){const payload=`event: update\ndata: ${JSON.stringify({type:'data_changed',at:new Date().toISOString()})}\n\n`;for(const client of realtimeClients){try{client.write(payload);}catch{realtimeClients.delete(client);}}}
+const realtimeClients=new Map(),realtimeClientCounts=new Map();
+const maxRealtimeClients=Math.max(10,Math.min(2000,Number(process.env.REALTIME_MAX_CLIENTS)||500));
+const maxRealtimeClientsPerUser=Math.max(1,Math.min(10,Number(process.env.REALTIME_MAX_CLIENTS_PER_USER)||3));
+function removeRealtimeClient(client){
+  const identity=realtimeClients.get(client);
+  if(!identity)return;
+  realtimeClients.delete(client);
+  const remaining=(realtimeClientCounts.get(identity)||1)-1;
+  if(remaining>0)realtimeClientCounts.set(identity,remaining);else realtimeClientCounts.delete(identity);
+}
+function publishRealtime(){const payload=`event: update\ndata: ${JSON.stringify({type:'data_changed',at:new Date().toISOString()})}\n\n`;for(const client of realtimeClients.keys()){try{client.write(payload);}catch{removeRealtimeClient(client);}}}
 app.use((req,res,next)=>{res.on('finish',()=>{if(res.statusCode>=200&&res.statusCode<300&&['POST','PATCH','PUT','DELETE'].includes(req.method)&&/^\/v1\/(orders|customer\/orders|admin\/orders|city-admin\/orders|rider\/(availability|profile)|merchant\/(profile|products))/.test(req.path))publishRealtime(req.path);});next();});
 
 const asyncRoute = handler => (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next);
@@ -353,7 +362,23 @@ app.get('/v1/admin/monitoring',auth('admin'),asyncRoute(async(_req,res)=>{const 
   pool.query(`SELECT backup_name,tables_count,rows_count,backup_size_bytes,sha256,created_at,source,integrity_verified,integrity_verified_at FROM (SELECT backup_name,tables_count,rows_count,backup_size_bytes,sha256,created_at,'manual' source,false integrity_verified,NULL::timestamptz integrity_verified_at FROM manual_backup_records UNION ALL SELECT backup_name,tables_count,rows_count,backup_size_bytes,sha256,created_at,'automatic' source,integrity_verified,integrity_verified_at FROM automated_backup_records WHERE status='sent') backups ORDER BY created_at DESC LIMIT 1`)
 ]);res.json({status:{api:'ok',database:'ok',version:releaseVersion,serverTime:clock.rows[0].server_time,uptimeSeconds:Math.floor(process.uptime()),dbLatencyMs:Date.now()-started},events24h:Object.fromEntries(eventCounts.rows.map(row=>[row.severity,row.count])),events:events.rows,orders:orders.rows[0],applications:applications.rows[0],lastBackup:backup.rows[0]||null});}));
 app.post('/v1/admin/monitoring/backup-confirmation',auth('admin'),asyncRoute(async(req,res)=>{const backupName=String(req.body.backupName||'').trim(),tablesCount=req.body.tablesCount==null?null:Number(req.body.tablesCount),rowsCount=req.body.rowsCount==null?null:Number(req.body.rowsCount),backupSizeBytes=req.body.backupSizeBytes==null?null:Number(req.body.backupSizeBytes),sha256=String(req.body.sha256||'').trim().toLowerCase()||null;if(backupName.length<3||backupName.length>160||[tablesCount,rowsCount,backupSizeBytes].some(value=>value!==null&&(!Number.isInteger(value)||value<0))||sha256&&!/^[0-9a-f]{64}$/.test(sha256))return res.status(400).json({error:'INVALID_BACKUP_CONFIRMATION'});const saved=await pool.query(`INSERT INTO manual_backup_records(backup_name,tables_count,rows_count,backup_size_bytes,sha256,confirmed_by) VALUES($1,$2,$3,$4,$5,$6) RETURNING id,backup_name,tables_count,rows_count,backup_size_bytes,sha256,created_at`,[backupName,tablesCount,rowsCount,backupSizeBytes,sha256,req.user.sub]);await pool.query(`INSERT INTO admin_audit_log(actor_user_id,action,details) VALUES($1,'backup.confirmed',$2::jsonb)`,[req.user.sub,JSON.stringify({backupId:saved.rows[0].id,backupName,tablesCount,rowsCount})]);res.status(201).json({backup:saved.rows[0]});}));
-app.get('/v1/realtime',auth(),(req,res)=>{res.set({'Content-Type':'text/event-stream','Cache-Control':'no-cache, no-transform','Connection':'keep-alive','X-Accel-Buffering':'no'});res.flushHeaders?.();res.write(`event: ready\ndata: ${JSON.stringify({ok:true,role:req.user.role})}\n\n`);realtimeClients.add(res);const heartbeat=setInterval(()=>res.write(`: heartbeat ${Date.now()}\n\n`),25000);heartbeat.unref();req.on('close',()=>{clearInterval(heartbeat);realtimeClients.delete(res);});});
+app.get('/v1/realtime',auth(),(req,res)=>{
+  const identity=String(req.user.sub||'');
+  if(realtimeClients.size>=maxRealtimeClients)return res.status(503).set('Retry-After','30').json({error:'REALTIME_CAPACITY_REACHED'});
+  if((realtimeClientCounts.get(identity)||0)>=maxRealtimeClientsPerUser)return res.status(429).set('Retry-After','15').json({error:'REALTIME_CONNECTION_LIMIT'});
+  res.set({'Content-Type':'text/event-stream','Cache-Control':'no-cache, no-transform','Connection':'keep-alive','X-Accel-Buffering':'no'});
+  res.flushHeaders?.();
+  res.write(`event: ready\ndata: ${JSON.stringify({ok:true,role:req.user.role})}\n\n`);
+  realtimeClients.set(res,identity);
+  realtimeClientCounts.set(identity,(realtimeClientCounts.get(identity)||0)+1);
+  const heartbeat=setInterval(()=>{try{res.write(`: heartbeat ${Date.now()}\n\n`);}catch{clearInterval(heartbeat);removeRealtimeClient(res);}},25000);
+  heartbeat.unref();
+  let closed=false;
+  const close=()=>{if(closed)return;closed=true;clearInterval(heartbeat);removeRealtimeClient(res);};
+  req.once('close',close);
+  res.once('close',close);
+  res.once('error',close);
+});
 app.get('/v1/catalog', asyncRoute(async (_req,res)=>{
   let rows;
   try {

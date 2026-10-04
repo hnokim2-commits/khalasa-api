@@ -1,0 +1,2 @@
+KHALASA API V181
+Realtime connection protection: per-user/global limits and guaranteed cleanup.
