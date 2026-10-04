@@ -6,6 +6,7 @@ import jwt from 'jsonwebtoken';
 import pg from 'pg';
 import ExcelJS from 'exceljs';
 import { routeCompatibility, routePolicyFor } from './route-policy.mjs';
+import { startAutomatedBackups } from './automated-backup.mjs';
 const { Pool } = pg;
 
 const required = ['DATABASE_URL', 'JWT_SECRET'];
@@ -319,7 +320,7 @@ app.get('/v1/admin/monitoring/readiness',auth('admin'),asyncRoute(async(_req,res
     pool.query(`SELECT pg_database_size(current_database())::bigint database_size_bytes,current_database() database_name,now() server_time`),
     pool.query(`SELECT count(*)::int total,count(*) FILTER(WHERE state='active')::int active,count(*) FILTER(WHERE wait_event IS NOT NULL)::int waiting FROM pg_stat_activity WHERE datname=current_database()`),
     pool.query(`SELECT count(*) FILTER(WHERE severity IN ('error','critical'))::int errors_24h,count(*) FILTER(WHERE severity='warning')::int warnings_24h,count(*) FILTER(WHERE created_at>=now()-interval '1 hour' AND severity IN ('error','critical'))::int errors_1h FROM system_events WHERE created_at>=now()-interval '24 hours'`),
-    pool.query(`SELECT backup_name,created_at,EXTRACT(EPOCH FROM(now()-created_at))/3600 age_hours FROM manual_backup_records ORDER BY created_at DESC LIMIT 1`),
+    pool.query(`SELECT backup_name,created_at,EXTRACT(EPOCH FROM(now()-created_at))/3600 age_hours FROM (SELECT backup_name,created_at FROM manual_backup_records UNION ALL SELECT backup_name,created_at FROM automated_backup_records WHERE status='sent') backups ORDER BY created_at DESC LIMIT 1`),
     pool.query(`SELECT count(*)::int count,max(name) latest FROM schema_migrations`)
   ]);
   const services={
@@ -340,7 +341,7 @@ app.get('/v1/admin/monitoring',auth('admin'),asyncRoute(async(_req,res)=>{const 
   pool.query(`SELECT severity,count(*)::int count FROM system_events WHERE created_at>=now()-interval '24 hours' GROUP BY severity`),
   pool.query(`SELECT count(*) FILTER(WHERE status IN ('awaiting_merchant','preparing','awaiting_rider','assigned','picked_up'))::int active,count(*) FILTER(WHERE status IN ('awaiting_merchant','preparing','awaiting_rider','assigned','picked_up') AND created_at<now()-interval '30 minutes')::int delayed,count(*) FILTER(WHERE status='delivered' AND updated_at>=now()-interval '24 hours')::int delivered_24h,count(*) FILTER(WHERE status='cancelled' AND updated_at>=now()-interval '24 hours')::int cancelled_24h,count(*) FILTER(WHERE refunded_at>=now()-interval '24 hours')::int refunded_24h FROM orders`),
   pool.query(`SELECT (SELECT count(*) FROM merchant_applications WHERE status='pending')::int merchant_pending,(SELECT count(*) FROM rider_applications WHERE status='pending')::int rider_pending,(SELECT count(*) FROM merchant_applications WHERE status='rejected' AND reviewed_at>=now()-interval '24 hours')::int merchant_rejected_24h,(SELECT count(*) FROM rider_applications WHERE status='rejected' AND reviewed_at>=now()-interval '24 hours')::int rider_rejected_24h`),
-  pool.query(`SELECT backup_name,tables_count,rows_count,backup_size_bytes,sha256,created_at FROM manual_backup_records ORDER BY created_at DESC LIMIT 1`)
+  pool.query(`SELECT backup_name,tables_count,rows_count,backup_size_bytes,sha256,created_at,source FROM (SELECT backup_name,tables_count,rows_count,backup_size_bytes,sha256,created_at,'manual' source FROM manual_backup_records UNION ALL SELECT backup_name,tables_count,rows_count,backup_size_bytes,sha256,created_at,'automatic' source FROM automated_backup_records WHERE status='sent') backups ORDER BY created_at DESC LIMIT 1`)
 ]);res.json({status:{api:'ok',database:'ok',version:'v77',serverTime:clock.rows[0].server_time,uptimeSeconds:Math.floor(process.uptime()),dbLatencyMs:Date.now()-started},events24h:Object.fromEntries(eventCounts.rows.map(row=>[row.severity,row.count])),events:events.rows,orders:orders.rows[0],applications:applications.rows[0],lastBackup:backup.rows[0]||null});}));
 app.post('/v1/admin/monitoring/backup-confirmation',auth('admin'),asyncRoute(async(req,res)=>{const backupName=String(req.body.backupName||'').trim(),tablesCount=req.body.tablesCount==null?null:Number(req.body.tablesCount),rowsCount=req.body.rowsCount==null?null:Number(req.body.rowsCount),backupSizeBytes=req.body.backupSizeBytes==null?null:Number(req.body.backupSizeBytes),sha256=String(req.body.sha256||'').trim().toLowerCase()||null;if(backupName.length<3||backupName.length>160||[tablesCount,rowsCount,backupSizeBytes].some(value=>value!==null&&(!Number.isInteger(value)||value<0))||sha256&&!/^[0-9a-f]{64}$/.test(sha256))return res.status(400).json({error:'INVALID_BACKUP_CONFIRMATION'});const saved=await pool.query(`INSERT INTO manual_backup_records(backup_name,tables_count,rows_count,backup_size_bytes,sha256,confirmed_by) VALUES($1,$2,$3,$4,$5,$6) RETURNING id,backup_name,tables_count,rows_count,backup_size_bytes,sha256,created_at`,[backupName,tablesCount,rowsCount,backupSizeBytes,sha256,req.user.sub]);await pool.query(`INSERT INTO admin_audit_log(actor_user_id,action,details) VALUES($1,'backup.confirmed',$2::jsonb)`,[req.user.sub,JSON.stringify({backupId:saved.rows[0].id,backupName,tablesCount,rowsCount})]);res.status(201).json({backup:saved.rows[0]});}));
 app.get('/v1/realtime',auth(),(req,res)=>{res.set({'Content-Type':'text/event-stream','Cache-Control':'no-cache, no-transform','Connection':'keep-alive','X-Accel-Buffering':'no'});res.flushHeaders?.();res.write(`event: ready\ndata: ${JSON.stringify({ok:true,role:req.user.role})}\n\n`);realtimeClients.add(res);const heartbeat=setInterval(()=>res.write(`: heartbeat ${Date.now()}\n\n`),25000);heartbeat.unref();req.on('close',()=>{clearInterval(heartbeat);realtimeClients.delete(res);});});
@@ -848,4 +849,7 @@ app.post('/v1/city-admin/partner-requests',auth('city_admin'),cityPermission('pa
 app.get('/v1/city-admin/partner-requests',auth('city_admin'),cityPermission('partners.request'),asyncRoute(async(req,res)=>{const rows=await pool.query(`SELECT * FROM city_partner_requests WHERE city_id=$1 ORDER BY created_at DESC`,[req.cityScope.city_id]);res.json({requests:rows.rows});}));
 
 app.use((error, req, res, _next) => { const status=error.status||500,code=error.code||error.message||'INTERNAL_ERROR';console.error({code:String(code).slice(0,100),status,route:safeMonitoringRoute(req.path)});if(status>=500)void recordSystemEvent({severity:'error',category:'exception',code,route:safeMonitoringRoute(req.path),method:req.method,httpStatus:status});if(error?.message==='CORS_NOT_ALLOWED')return res.status(403).json({error:'CORS_NOT_ALLOWED'});res.status(status).json({ error:error.code||'INTERNAL_ERROR',...(error.details?{details:error.details}:{}) }); });
-app.listen(port, () => console.log(`Khalasa API listening on :${port}`));
+app.listen(port, () => {
+  console.log(`Khalasa API listening on :${port}`);
+  startAutomatedBackups(pool);
+});

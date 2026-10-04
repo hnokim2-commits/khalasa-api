@@ -1,0 +1,4 @@
+KHALASA API V170 — AUTOMATED ENCRYPTED EMAIL BACKUPS
+Schedule: every 12 hours
+Recipient: h.nokim2@gmail.com
+Encryption: AES-256-GCM with scrypt-derived key
