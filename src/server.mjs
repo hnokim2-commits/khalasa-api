@@ -17,7 +17,10 @@ if (process.env.NODE_ENV === 'production') app.set('trust proxy', 1);
 const port = Number(process.env.PORT || 8080);
 const commissionRate = Number(process.env.PLATFORM_COMMISSION_RATE || 0.12);
 const allowedOrigins = (process.env.CORS_ORIGINS || '').split(',').map(value=>value.trim().replace(/\/$/, '')).filter(Boolean);
-const pool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false });
+const databaseSsl = process.env.NODE_ENV === 'production'
+  ? { rejectUnauthorized: process.env.DB_SSL_REJECT_UNAUTHORIZED !== 'false' }
+  : false;
+const pool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: databaseSsl });
 const ownerPhone=String(process.env.OWNER_PHONE||'').trim().replace(/\s+/g,'');
 const ownerAccessCode=String(process.env.OWNER_ACCESS_CODE||'').trim();
 app.use(cors({ origin(origin, callback) { if (!origin || allowedOrigins.includes(origin)) return callback(null, true); callback(new Error('CORS_NOT_ALLOWED')); } }));
@@ -104,8 +107,13 @@ app.use(asyncRoute(async(req,res,next)=>{
   const requestKey=String(req.headers['x-idempotency-key']||'');
   if(!/^[A-Za-z0-9_-]{16,100}$/.test(requestKey))return res.status(400).json({error:'IDEMPOTENCY_KEY_REQUIRED'});
   const operation=req.path.includes('/cash-remittances')?'rider_cash_remittance':req.path.includes('/rider/')?'rider_withdrawal':'merchant_settlement';
-  const identity=String(req.headers.authorization||'');
-  const bucketKey=crypto.createHmac('sha256',process.env.RATE_LIMIT_SECRET||process.env.JWT_SECRET).update(`${operation}:${identity}:${requestKey}`).digest('hex');
+  const rawToken=String(req.headers.authorization||'').replace(/^Bearer\s+/i,'');
+  if(!rawToken)return res.status(401).json({error:'AUTH_REQUIRED'});
+  let financialIdentity;
+  try{financialIdentity=jwt.verify(rawToken,process.env.JWT_SECRET,{algorithms:['HS256'],issuer:'khalasa-api',audience:'khalasa-web'});}catch{return res.status(401).json({error:'INVALID_TOKEN'});}
+  const active=await pool.query(`SELECT 1 FROM users u JOIN user_roles ur ON ur.user_id=u.id AND ur.role=$2 WHERE u.id=$1 AND u.archived_at IS NULL AND u.account_status='active' AND u.session_version=$3`,[financialIdentity.sub,financialIdentity.role,Number(financialIdentity.ver||0)]);
+  if(!active.rowCount)return res.status(401).json({error:'SESSION_REVOKED'});
+  const bucketKey=crypto.createHmac('sha256',process.env.RATE_LIMIT_SECRET||process.env.JWT_SECRET).update(`${operation}:${financialIdentity.sub}:${requestKey}`).digest('hex');
   const claimed=await pool.query(`INSERT INTO financial_request_keys(bucket_key,operation) VALUES($1,$2) ON CONFLICT(bucket_key) DO NOTHING RETURNING bucket_key`,[bucketKey,operation]);
   if(!claimed.rowCount)return res.status(409).json({error:'FINANCIAL_REQUEST_ALREADY_SUBMITTED'});
   res.on('finish',()=>{if(res.statusCode>=400)void pool.query('DELETE FROM financial_request_keys WHERE bucket_key=$1',[bucketKey]).catch(()=>{});});

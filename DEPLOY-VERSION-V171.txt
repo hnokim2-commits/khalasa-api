@@ -1,0 +1,4 @@
+KHALASA API V171 — SECURITY HARDENING
+- Database TLS certificate verification is enabled by default.
+- Financial idempotency records require a verified, active session before database writes.
+- Includes V170 automated encrypted backups and V169 global user controls.
