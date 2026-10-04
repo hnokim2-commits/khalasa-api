@@ -10,6 +10,14 @@ test('backup is encrypted before it is attached', () => {
   assert.match(source, /encryptBackup\(backup, passphrase\)/);
 });
 
+test('encrypted backup is decrypted and structurally verified before email delivery', () => {
+  assert.match(source,/createDecipheriv\('aes-256-gcm'/);
+  assert.match(source,/decipher\.setAuthTag/);
+  assert.match(source,/BACKUP_INTEGRITY_MISMATCH/);
+  assert.ok(source.indexOf('verifyEncryptedBackup(envelope,passphrase,backup)') < source.indexOf("subject: 'نسخة خالصة الاحتياطية المشفرة'"));
+  assert.match(source,/integrity_verified,integrity_verified_at/);
+});
+
 test('scheduler defaults to twelve hours and uses a database lock', () => {
   assert.match(source, /DEFAULT_INTERVAL_HOURS = 12/);
   assert.match(source, /pg_try_advisory_lock/);

@@ -1,0 +1,4 @@
+KHALASA API V174 — AUTOMATED BACKUP INTEGRITY VERIFICATION
+- Every encrypted backup is decrypted in memory and structurally verified before email delivery.
+- Verification checks authenticated encryption, table count, row count, migrations and creation timestamp.
+- Verification result is stored in automated_backup_records.

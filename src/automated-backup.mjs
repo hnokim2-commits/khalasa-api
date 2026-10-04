@@ -43,6 +43,20 @@ function encryptBackup(backup, passphrase) {
   return { envelope, sha256: crypto.createHash('sha256').update(envelope).digest('hex') };
 }
 
+function verifyEncryptedBackup(envelope, passphrase, expected) {
+  const parsedEnvelope = JSON.parse(envelope.toString('utf8'));
+  if (parsedEnvelope.format !== 'khalasa-encrypted-backup' || parsedEnvelope.algorithm !== 'aes-256-gcm+scrypt') throw new Error('BACKUP_ENVELOPE_INVALID');
+  const salt=Buffer.from(parsedEnvelope.salt,'base64'),iv=Buffer.from(parsedEnvelope.iv,'base64'),tag=Buffer.from(parsedEnvelope.tag,'base64'),ciphertext=Buffer.from(parsedEnvelope.data,'base64');
+  if(salt.length!==16||iv.length!==12||tag.length!==16||!ciphertext.length)throw new Error('BACKUP_ENVELOPE_INVALID');
+  const key=crypto.scryptSync(passphrase,salt,32),decipher=crypto.createDecipheriv('aes-256-gcm',key,iv);
+  decipher.setAuthTag(tag);
+  const restored=JSON.parse(Buffer.concat([decipher.update(ciphertext),decipher.final()]).toString('utf8'));
+  if(restored.format!=='khalasa-automated-backup'||restored.version!==1||!Array.isArray(restored.tables)||!Array.isArray(restored.migrations))throw new Error('BACKUP_CONTENT_INVALID');
+  const expectedRows=expected.tables.reduce((sum,table)=>sum+table.rows.length,0),restoredRows=restored.tables.reduce((sum,table)=>sum+(Array.isArray(table.rows)?table.rows.length:0),0);
+  if(restored.tables.length!==expected.tables.length||restoredRows!==expectedRows||restored.createdAt!==expected.createdAt)throw new Error('BACKUP_INTEGRITY_MISMATCH');
+  return { tablesCount: restored.tables.length, rowsCount: restoredRows, migrationsCount: restored.migrations.length };
+}
+
 async function sendEmail({ to, from, apiKey, subject, html, attachment, filename, idempotencyKey }) {
   const body = { from, to: [to], subject, html };
   if (attachment) body.attachments = [{ filename, content: attachment.toString('base64'), content_type: 'application/octet-stream' }];
@@ -77,10 +91,11 @@ export function startAutomatedBackups(pool) {
       const backup = await collectDatabase(client);
       const { envelope, sha256 } = encryptBackup(backup, passphrase);
       if (envelope.length > MAX_ATTACHMENT_BYTES) throw new Error('BACKUP_ATTACHMENT_TOO_LARGE');
+      const verification=verifyEncryptedBackup(envelope,passphrase,backup);
       const filename = `khalasa-${filenameTimestamp()}.kbackup`;
       const rowsCount = backup.tables.reduce((sum, table) => sum + table.rows.length, 0);
-      await sendEmail({ to: recipient, from: sender, apiKey, subject: 'نسخة خالصة الاحتياطية المشفرة', html: `<div dir="rtl"><h2>اكتملت النسخة الاحتياطية</h2><p>الملف المرفق مشفر ولا يمكن فتحه دون كلمة التشفير.</p><p>الجداول: ${backup.tables.length} — الصفوف: ${rowsCount}</p><p>SHA-256: <code>${sha256}</code></p></div>`, attachment: envelope, filename, idempotencyKey: `khalasa-backup/${filename}` });
-      await client.query(`INSERT INTO automated_backup_records(backup_name,tables_count,rows_count,backup_size_bytes,sha256,status,recipient) VALUES($1,$2,$3,$4,$5,'sent',$6)`, [filename, backup.tables.length, rowsCount, envelope.length, sha256, recipient]);
+      await sendEmail({ to: recipient, from: sender, apiKey, subject: 'نسخة خالصة الاحتياطية المشفرة', html: `<div dir="rtl"><h2>اكتملت النسخة الاحتياطية</h2><p>✅ تم فك النسخة واختبار سلامة محتواها آليًا قبل الإرسال.</p><p>الملف المرفق مشفر ولا يمكن فتحه دون كلمة التشفير.</p><p>الجداول: ${verification.tablesCount} — الصفوف: ${verification.rowsCount} — ملفات الترحيل: ${verification.migrationsCount}</p><p>SHA-256: <code>${sha256}</code></p></div>`, attachment: envelope, filename, idempotencyKey: `khalasa-backup/${filename}` });
+      await client.query(`INSERT INTO automated_backup_records(backup_name,tables_count,rows_count,backup_size_bytes,sha256,status,recipient,integrity_verified,integrity_verified_at) VALUES($1,$2,$3,$4,$5,'sent',$6,true,now())`, [filename, verification.tablesCount, verification.rowsCount, envelope.length, sha256, recipient]);
       console.log(`Encrypted backup emailed: ${filename}`);
     } catch (error) {
       console.error('Automated backup failed', error.message);
