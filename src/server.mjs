@@ -15,7 +15,7 @@ const app = express();
 app.disable('x-powered-by');
 if (process.env.NODE_ENV === 'production') app.set('trust proxy', 1);
 const port = Number(process.env.PORT || 8080);
-const releaseVersion = String(process.env.RELEASE_VERSION || 'v181').trim().slice(0,40);
+const releaseVersion = String(process.env.RELEASE_VERSION || 'v182').trim().slice(0,40);
 const commissionRate = Number(process.env.PLATFORM_COMMISSION_RATE || 0.12);
 const allowedOrigins = (process.env.CORS_ORIGINS || '').split(',').map(value=>value.trim().replace(/\/$/, '')).filter(Boolean);
 const databaseSsl = process.env.NODE_ENV === 'production'
@@ -25,8 +25,28 @@ const pool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: databas
 const ownerPhone=String(process.env.OWNER_PHONE||'').trim().replace(/\s+/g,'');
 const ownerAccessCode=String(process.env.OWNER_ACCESS_CODE||'').trim();
 app.use(cors({ origin(origin, callback) { if (!origin || allowedOrigins.includes(origin)) return callback(null, true); callback(new Error('CORS_NOT_ALLOWED')); } }));
+const isDocumentUpload=req=>req.method==='POST'&&(/^\/v1\/(rider|merchant)\/documents$/.test(req.path)||/^\/v1\/city-admin\/personnel\/[0-9a-f-]{36}\/documents$/i.test(req.path)||req.path==='/v1/city-admin/treasury/expenses'||/^\/v1\/city-admin\/treasury\/advances\/[0-9a-f-]{36}\/settlements$/i.test(req.path));
+const maxDocumentRequestBytes=6*1024*1024,maxConcurrentDocumentUploads=Math.max(2,Math.min(100,Number(process.env.MAX_CONCURRENT_DOCUMENT_UPLOADS)||20)),maxDocumentUploadsPerIp=Math.max(1,Math.min(10,Number(process.env.MAX_DOCUMENT_UPLOADS_PER_IP)||3));
+let activeDocumentUploads=0;
+const documentUploadsByIp=new Map();
+app.use((req,res,next)=>{
+  if(!isDocumentUpload(req))return next();
+  if(!/^application\/json(?:\s*;|$)/i.test(String(req.headers['content-type']||'')))return res.status(415).json({error:'JSON_CONTENT_TYPE_REQUIRED'});
+  const declaredLength=Number(req.headers['content-length']);
+  if(Number.isFinite(declaredLength)&&declaredLength>maxDocumentRequestBytes)return res.status(413).json({error:'PAYLOAD_TOO_LARGE'});
+  const clientKey=String(req.ip||req.socket.remoteAddress||'unknown');
+  if(activeDocumentUploads>=maxConcurrentDocumentUploads)return res.status(503).set('Retry-After','10').json({error:'UPLOAD_CAPACITY_REACHED'});
+  if((documentUploadsByIp.get(clientKey)||0)>=maxDocumentUploadsPerIp)return res.status(429).set('Retry-After','10').json({error:'UPLOAD_CONCURRENCY_LIMIT'});
+  activeDocumentUploads+=1;
+  documentUploadsByIp.set(clientKey,(documentUploadsByIp.get(clientKey)||0)+1);
+  let released=false;
+  const release=()=>{if(released)return;released=true;activeDocumentUploads=Math.max(0,activeDocumentUploads-1);const remaining=(documentUploadsByIp.get(clientKey)||1)-1;if(remaining>0)documentUploadsByIp.set(clientKey,remaining);else documentUploadsByIp.delete(clientKey);};
+  res.once('finish',release);
+  res.once('close',release);
+  next();
+});
 const standardJsonParser=express.json({limit:'512kb'}),documentJsonParser=express.json({limit:'6mb'});
-app.use((req,res,next)=>req.method==='POST'&&(/^\/v1\/(rider|merchant)\/documents$/.test(req.path)||/^\/v1\/city-admin\/personnel\/[0-9a-f-]{36}\/documents$/i.test(req.path)||req.path==='/v1/city-admin/treasury/expenses'||/^\/v1\/city-admin\/treasury\/advances\/[0-9a-f-]{36}\/settlements$/i.test(req.path))?documentJsonParser(req,res,next):standardJsonParser(req,res,next));
+app.use((req,res,next)=>isDocumentUpload(req)?documentJsonParser(req,res,next):standardJsonParser(req,res,next));
 app.use((_req, res, next) => {
   res.set({
     'X-Content-Type-Options': 'nosniff',
@@ -882,8 +902,12 @@ app.patch('/v1/admin/partner-requests/:id',auth('admin'),asyncRoute(async(req,re
 app.post('/v1/city-admin/partner-requests',auth('city_admin'),cityPermission('partners.request'),asyncRoute(async(req,res)=>{const {partnerType,fullName,phone,details={}}=req.body;if(!['merchant','rider'].includes(partnerType)||!fullName||!/^01\d{9}$/.test(String(phone||'')))return res.status(400).json({error:'INVALID_PARTNER_REQUEST'});const row=await pool.query(`INSERT INTO city_partner_requests(city_id,requested_by,partner_type,full_name,phone,details) VALUES($1,$2,$3,$4,$5,$6::jsonb) RETURNING *`,[req.cityScope.city_id,req.user.sub,partnerType,fullName,phone,JSON.stringify(details)]);res.status(201).json({request:row.rows[0]});}));
 app.get('/v1/city-admin/partner-requests',auth('city_admin'),cityPermission('partners.request'),asyncRoute(async(req,res)=>{const rows=await pool.query(`SELECT * FROM city_partner_requests WHERE city_id=$1 ORDER BY created_at DESC`,[req.cityScope.city_id]);res.json({requests:rows.rows});}));
 
-app.use((error, req, res, _next) => { const status=error.status||500,code=error.code||error.message||'INTERNAL_ERROR';console.error({code:String(code).slice(0,100),status,route:safeMonitoringRoute(req.path)});if(status>=500)void recordSystemEvent({severity:'error',category:'exception',code,route:safeMonitoringRoute(req.path),method:req.method,httpStatus:status});if(error?.message==='CORS_NOT_ALLOWED')return res.status(403).json({error:'CORS_NOT_ALLOWED'});res.status(status).json({ error:error.code||'INTERNAL_ERROR',...(error.details?{details:error.details}:{}) }); });
-app.listen(port, () => {
+app.use((error, req, res, _next) => { const status=error.status||500,code=error.code||error.message||'INTERNAL_ERROR';console.error({code:String(code).slice(0,100),status,route:safeMonitoringRoute(req.path)});if(status>=500)void recordSystemEvent({severity:'error',category:'exception',code,route:safeMonitoringRoute(req.path),method:req.method,httpStatus:status});if(error?.message==='CORS_NOT_ALLOWED')return res.status(403).json({error:'CORS_NOT_ALLOWED'});if(error?.type==='entity.too.large')return res.status(413).json({error:'PAYLOAD_TOO_LARGE'});if(error instanceof SyntaxError&&error?.type==='entity.parse.failed')return res.status(400).json({error:'INVALID_JSON'});res.status(status).json({ error:error.code||'INTERNAL_ERROR',...(error.details?{details:error.details}:{}) }); });
+const server=app.listen(port, () => {
   console.log(`Khalasa API listening on :${port}`);
   startAutomatedBackups(pool);
 });
+server.headersTimeout=15_000;
+server.requestTimeout=60_000;
+server.keepAliveTimeout=5_000;
+server.maxRequestsPerSocket=100;

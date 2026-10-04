@@ -1,0 +1,2 @@
+KHALASA API V182
+Early payload rejection, bounded upload concurrency, and HTTP resource timeouts.
