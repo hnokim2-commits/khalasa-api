@@ -1,0 +1,6 @@
+KHALASA API V175 — INVESTOR SESSION SAFETY
+
+- Editing the currently signed-in investor without changing the access code keeps the active session.
+- Editing another investor user still revokes that user's previous sessions.
+- Changing an access code still revokes previous sessions for security.
+- Set RELEASE_VERSION=v175 in Render when deploying.
