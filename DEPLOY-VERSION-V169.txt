@@ -1,0 +1,6 @@
+Khalasa API V169 - Global user lifecycle
+
+- Migration 0059 adds the central account_status state.
+- Every standard JWT checks active status before access.
+- Central administrator lifecycle endpoints cover all roles.
+- Credentials and active sessions are revoked transactionally.
