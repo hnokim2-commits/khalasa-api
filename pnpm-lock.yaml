@@ -1,3 +1,21 @@
-import test from 'node:test';import assert from 'node:assert/strict';import {readFile} from 'node:fs/promises';
-test('wholesale workflow has replay and stock protections',async()=>{const source=await readFile(new URL('../src/server.mjs',import.meta.url),'utf8');assert.match(source,/WHOLESALE_REQUEST_NOT_ACCEPTABLE/);assert.match(source,/x-idempotency-key/);assert.match(source,/FOR UPDATE OF w,p/);assert.match(source,/stock_quantity=stock_quantity-\$1/)});
-test('wholesale security migration is executable by the runner',async()=>{const sql=await readFile(new URL('../migrations/0030_secure_wholesale_workflow.sql',import.meta.url),'utf8');assert.match(sql,/wholesale_requests_idempotency_idx/);assert.match(sql,/accepted_at/);assert.match(sql,/fulfilled_at/)});
+NODE_ENV=development
+PORT=8080
+DATABASE_URL=postgresql://USER:PASSWORD@localhost:5432/DATABASE
+DB_SSL_REJECT_UNAUTHORIZED=true
+JWT_SECRET=replace_with_a_long_random_secret_before_production
+CORS_ORIGINS=https://your-site.netlify.app,http://localhost:4173
+PLATFORM_COMMISSION_RATE=0.12
+# Configure a real OTP delivery webhook before production. Development returns devOtp only.
+OTP_PROVIDER=disabled
+OTP_WEBHOOK_URL=
+OTP_WEBHOOK_SECRET=
+# Direct Meta WhatsApp Cloud API alternative: set OTP_PROVIDER=meta_whatsapp.
+WHATSAPP_ACCESS_TOKEN=
+WHATSAPP_PHONE_NUMBER_ID=
+WHATSAPP_TEMPLATE_NAME=
+WHATSAPP_TEMPLATE_LANGUAGE=ar
+WHATSAPP_GRAPH_VERSION=v23.0
+# Email OTP alternative: set OTP_PROVIDER=resend_email.
+RESEND_API_KEY=
+OTP_EMAIL_FROM=Khalasa <otp@send.khalasa-eg.com>
+STORAGE_PROVIDER=private-object-storage
