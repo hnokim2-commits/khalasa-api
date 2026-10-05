@@ -1,0 +1,4 @@
+KHALASA API V192
+Authentication-first partner access-code validation
+2026-10-05
+
