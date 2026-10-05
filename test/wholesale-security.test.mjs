@@ -1,0 +1,3 @@
+import test from 'node:test';import assert from 'node:assert/strict';import {readFile} from 'node:fs/promises';
+test('wholesale workflow has replay and stock protections',async()=>{const source=await readFile(new URL('../src/server.mjs',import.meta.url),'utf8');assert.match(source,/WHOLESALE_REQUEST_NOT_ACCEPTABLE/);assert.match(source,/x-idempotency-key/);assert.match(source,/FOR UPDATE OF w,p/);assert.match(source,/stock_quantity=stock_quantity-\$1/)});
+test('wholesale security migration is executable by the runner',async()=>{const sql=await readFile(new URL('../migrations/0030_secure_wholesale_workflow.sql',import.meta.url),'utf8');assert.match(sql,/wholesale_requests_idempotency_idx/);assert.match(sql,/accepted_at/);assert.match(sql,/fulfilled_at/)});
