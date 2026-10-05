@@ -13,6 +13,13 @@ test('partner creation and application routes reject weak access codes',()=>{
   assert.match(server,/validStaffAccessCode\(req\.body\?\.accessCode,req\.body\?\.phone\)/);
 });
 
+test('protected partner writes authenticate before validating the access code',()=>{
+  assert.match(server,/protectedPartnerAccessCodePaths/);
+  assert.match(server,/return auth\(policy\.role\)\(req,res,\(\)=>\{/);
+  assert.match(server,/pattern:\/\^\\\/v1\\\/admin/);
+  assert.match(server,/pattern:\/\^\\\/v1\\\/merchant\\\/rider-nominations/);
+});
+
 test('the shared access code policy rejects phone-derived and repeated secrets',()=>{
   assert.match(server,/code===normalizedPhone/);
   assert.match(server,/\/\^\(\.\)\\1\+\$\//);
