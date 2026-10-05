@@ -159,6 +159,28 @@ app.use((req,res,next)=>{
     next();
   });
 });
+const currentLegalTermsVersion='2026-10-05-v1';
+async function merchantActivationState(userId,client=pool){
+  const result=await client.query(`SELECT m.id,m.verification,m.is_accepting_orders,
+    EXISTS(SELECT 1 FROM legal_acceptances la WHERE la.user_id=m.owner_user_id AND la.role='merchant' AND la.responsibility_accepted=true AND la.privacy_accepted=true) legal_accepted,
+    (SELECT count(DISTINCT d.document_type)::int FROM merchant_documents d WHERE d.merchant_id=m.id AND d.verification='approved') approved_documents
+    FROM merchants m WHERE m.owner_user_id=$1 ORDER BY m.created_at LIMIT 1`,[userId]);
+  if(!result.rowCount)return null;
+  const merchant=result.rows[0],documentsComplete=Number(merchant.approved_documents)>=4;
+  return {...merchant,documentsComplete,operational:merchant.verification==='approved'&&merchant.legal_accepted&&documentsComplete};
+}
+function isMerchantOperationalWrite(req){
+  if(!['POST','PATCH','PUT','DELETE'].includes(req.method))return false;
+  if(/^\/v1\/merchant\/(applications|documents|onboarding-status)$/.test(req.path))return false;
+  return /^\/v1\/merchant\//.test(req.path)||/^\/v1\/orders\/[^/]+\/(merchant-accept|ready|cancel)$/.test(req.path);
+}
+app.use((req,res,next)=>{
+  if(!isMerchantOperationalWrite(req))return next();
+  return auth('merchant')(req,res,()=>merchantActivationState(req.user.sub).then(state=>{
+    if(!state?.operational)return res.status(403).json({error:'MERCHANT_ACTIVATION_REQUIRED',activation:state});
+    next();
+  }).catch(next));
+});
 const cityPermissions = ['orders.read','orders.manage','orders.assign','riders.read','riders.manage','riders.availability.manage','fleet.read','fleet.manage','fleet.employment.manage','fleet.assets.manage','personnel.read','personnel.manage','personnel.documents.read','personnel.documents.manage','attendance.read','attendance.manage','attendance.settings.manage','attendance.access.manage','attendance.shifts.manage','attendance.corrections.manage','attendance.records.manage','payroll.read','payroll.manage','payroll.policy.manage','payroll.adjustments.manage','payroll.submit','treasury.read','treasury.manage','treasury.expenses.create','treasury.receipts.read','treasury.advances.create','treasury.settlements.create','partners.request'];
 function normalizePermissions(value = {}) { return Object.fromEntries(cityPermissions.map(key => [key, value[key] === true])); }
 function cityPermission(...permissions) { return asyncRoute(async (req, res, next) => {
@@ -356,6 +378,19 @@ app.post('/v1/admin/riders',auth('admin'),asyncRoute(async(req,res)=>{
 }));
 
 app.get('/v1/public/cities',asyncRoute(async(_req,res)=>{const rows=await pool.query('SELECT id,name,governorate FROM cities WHERE is_active=true ORDER BY governorate,name');res.json({cities:rows.rows});}));
+app.get('/v1/merchant/onboarding-status',auth('merchant'),asyncRoute(async(req,res)=>{
+  const activation=await merchantActivationState(req.user.sub);
+  if(!activation)return res.status(404).json({error:'MERCHANT_NOT_FOUND'});
+  const documents=await pool.query(`SELECT document_type,verification,review_note FROM merchant_documents WHERE merchant_id=$1 ORDER BY created_at DESC`,[activation.id]);
+  res.json({activation:{...activation,requiredDocuments:['commercial_register','tax_card','owner_id','activity_license'],termsVersion:currentLegalTermsVersion},documents:documents.rows});
+}));
+app.post('/v1/legal/acceptance',auth('customer','merchant','rider'),asyncRoute(async(req,res)=>{
+  const termsVersion=String(req.body.termsVersion||'');
+  if(termsVersion!==currentLegalTermsVersion||req.body.responsibilityAccepted!==true||req.body.privacyAccepted!==true)return res.status(400).json({error:'LEGAL_ACCEPTANCE_REQUIRED'});
+  const ipHash=crypto.createHmac('sha256',process.env.JWT_SECRET).update(String(req.ip||'')).digest('hex'),userAgentHash=crypto.createHash('sha256').update(String(req.headers['user-agent']||'')).digest('hex');
+  await pool.query(`INSERT INTO legal_acceptances(user_id,role,terms_version,responsibility_accepted,privacy_accepted,ip_hash,user_agent_hash) VALUES($1,$2::user_role,$3,true,true,$4,$5) ON CONFLICT(user_id,role,terms_version) DO NOTHING`,[req.user.sub,req.user.role,termsVersion,ipHash,userAgentHash]);
+  res.status(201).json({accepted:true,termsVersion});
+}));
 app.post('/v1/merchant/applications',authRateLimit,asyncRoute(async(req,res)=>{const activityType=String(req.body.activityType||'retail'),ownerName=String(req.body.ownerName||'').trim(),displayName=String(req.body.displayName||'').trim(),phone=String(req.body.phone||'').trim(),category=String(req.body.category||'').trim(),cityId=String(req.body.cityId||''),address=String(req.body.address||'').trim(),accessCode=String(req.body.accessCode||''),consentVersion=String(req.body.consentVersion||'2026-09-24').slice(0,40);if(!['retail','supplier','hybrid'].includes(activityType))return res.status(400).json({error:'INVALID_ACTIVITY_TYPE'});if(req.body.securityConsent!==true||req.body.legalConsent!==true)return res.status(400).json({error:'CONSENT_REQUIRED'});if(!ownerName||!displayName||!/^01\d{9}$/.test(phone)||!category||!cityId||!address||accessCode.length<10)return res.status(400).json({error:'INVALID_MERCHANT_APPLICATION'});const city=await pool.query('SELECT id FROM cities WHERE id=$1 AND is_active=true',[cityId]);if(!city.rowCount)return res.status(404).json({error:'CITY_NOT_FOUND'});const exists=await pool.query(`SELECT 1 FROM users u JOIN user_roles ur ON ur.user_id=u.id AND ur.role='merchant' WHERE u.phone=$1 UNION ALL SELECT 1 FROM merchant_applications WHERE phone=$1 AND status=$2 LIMIT 1`,[phone,'pending']);if(exists.rowCount)return res.status(409).json({error:'PHONE_ALREADY_REGISTERED_OR_PENDING'});const row=await pool.query(`INSERT INTO merchant_applications(owner_name,display_name,phone,category,city_id,address,access_code_hash,security_consent_at,legal_consent_at,consent_version,activity_type) VALUES($1,$2,$3,$4,$5,$6,crypt($7,gen_salt('bf')),now(),now(),$8,$9) RETURNING id,status,activity_type,created_at,security_consent_at,legal_consent_at`,[ownerName,displayName,phone,category,cityId,address,accessCode,consentVersion,activityType]);res.status(201).json({application:row.rows[0]});}));
 app.get('/v1/admin/merchant-applications',auth('admin'),asyncRoute(async(_req,res)=>{const rows=await pool.query(`SELECT a.id,a.owner_name,a.display_name,a.phone,a.category,a.address,a.status,a.created_at,c.name city_name,c.governorate FROM merchant_applications a JOIN cities c ON c.id=a.city_id ORDER BY CASE WHEN a.status='pending' THEN 0 ELSE 1 END,a.created_at DESC`);res.json({applications:rows.rows});}));
 app.patch('/v1/admin/merchant-applications/:id',auth('admin'),asyncRoute(async(req,res)=>{if(!['approved','rejected'].includes(req.body.status))return res.status(400).json({error:'INVALID_REVIEW'});const client=await pool.connect();try{await client.query('BEGIN');const found=await client.query('SELECT * FROM merchant_applications WHERE id=$1 AND status=$2 FOR UPDATE',[req.params.id,'pending']);if(!found.rowCount){await client.query('ROLLBACK');return res.status(409).json({error:'APPLICATION_ALREADY_REVIEWED'});}const application=found.rows[0];if(req.body.status==='approved'){let user=await client.query('SELECT id FROM users WHERE phone=$1 FOR UPDATE',[application.phone]);if(user.rowCount){const assigned=await client.query(`SELECT 1 FROM user_roles WHERE user_id=$1 AND role='merchant'`,[user.rows[0].id]);if(assigned.rowCount){await client.query('ROLLBACK');return res.status(409).json({error:'PHONE_ALREADY_REGISTERED'});}}else user=await client.query(`INSERT INTO users(role,phone,full_name,is_phone_verified) VALUES('merchant',$1,$2,true) RETURNING id`,[application.phone,application.owner_name]);await client.query(`INSERT INTO user_roles(user_id,role) VALUES($1,'merchant') ON CONFLICT DO NOTHING`,[user.rows[0].id]);await client.query(`INSERT INTO merchants(owner_user_id,display_name,category,address,minimum_order,is_accepting_orders,verification,city_id) VALUES($1,$2,$3,$4,0,false,'pending',$5)`,[user.rows[0].id,application.display_name,application.category,application.address,application.city_id]);await client.query(`INSERT INTO partner_credentials(user_id,role,password_hash,is_active) VALUES($1,'merchant',$2,true) ON CONFLICT(user_id,role) DO UPDATE SET password_hash=excluded.password_hash,is_active=true,updated_at=now()`,[user.rows[0].id,application.access_code_hash]);}const updated=await client.query('UPDATE merchant_applications SET status=$1,reviewed_by=$2,reviewed_at=now() WHERE id=$3 RETURNING id,status',[req.body.status,req.user.sub,req.params.id]);await client.query('COMMIT');res.json({application:updated.rows[0]});}catch(error){await client.query('ROLLBACK');throw error;}finally{client.release();}}));
