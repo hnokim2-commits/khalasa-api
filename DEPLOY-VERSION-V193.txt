@@ -1,0 +1,4 @@
+KHALASA API V193
+Merchant legal acceptance and activation gate
+2026-10-05
+
