@@ -1,0 +1,4 @@
+KHALASA API V191
+Partner access-code security hardening
+2026-10-05
+
