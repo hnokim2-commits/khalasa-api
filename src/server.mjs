@@ -69,9 +69,7 @@ app.use((req,res,next)=>{
   });
 });
 const partnerAccessCodeWritePaths=[
-  /^\/v1\/(merchant|rider)\/applications$/,
-  /^\/v1\/merchant\/rider-nominations$/,
-  /^\/v1\/admin\/(partner-credentials|merchants|riders)$/
+  /^\/v1\/(merchant|rider)\/applications$/
 ];
 app.use((req,res,next)=>{
   if(req.method!=='POST'||!partnerAccessCodeWritePaths.some(pattern=>pattern.test(req.path)))return next();
@@ -148,6 +146,19 @@ const mainStaffPermissions=['dashboard.read','orders.read','orders.manage','part
 function normalizeMainStaffPermissions(value={}){return Object.fromEntries(mainStaffPermissions.map(key=>[key,value[key]===true]));}
 function mainStaffPermissionFor(req){const path=req.path,write=!['GET','HEAD','OPTIONS'].includes(req.method);if(/^\/v1\/admin\/staff-users/.test(path))return write?'staff.manage':'staff.read';if(/^\/v1\/admin\/(cities|city-users)/.test(path))return write?'cities.manage':'cities.read';if(/^\/v1\/admin\/monitoring/.test(path))return 'system.monitor';if(/^\/v1\/admin\/account-recovery/.test(path))return write?'security.manage':'security.audit';if(/documents/.test(path))return write?'documents.manage':'documents.read';if(/^\/v1\/admin\/orders\/[^/]+\/refund/.test(path))return 'finance.manage';if(/^\/v1\/admin\/(rider-cash-positions|riders\/[^/]+\/cash-remittances)/.test(path))return write?'treasury.manage':'treasury.read';if(/^\/v1\/admin\/orders/.test(path))return write?'orders.manage':'orders.read';if(/^\/v1\/admin\/(merchants|riders|partners|merchant-applications|rider-applications|partner-requests)/.test(path))return write?'partners.manage':'partners.read';if(/^\/v1\/admin\/payroll/.test(path))return write?'payroll.manage':'payroll.read';if(/^\/v1\/admin\/(treasury|cash)/.test(path))return write?'treasury.manage':'treasury.read';if(/^\/v1\/admin\/(accounting|financial|entity|platform|commission|city-revenue|merchant-settlements|rider-withdrawals|export-xlsx)/.test(path))return write?'finance.manage':'finance.read';return null;}
 function auth(...roles) { return asyncRoute(async (req,res,next)=>{try{const raw=req.headers.authorization?.replace(/^Bearer\s+/i,'');if(!raw)return res.status(401).json({error:'AUTH_REQUIRED'});const decoded=jwt.verify(raw,process.env.JWT_SECRET,jwtOptions);const current=await pool.query(`SELECT u.id,u.phone,u.session_version,EXISTS(SELECT 1 FROM user_roles ur WHERE ur.user_id=u.id AND ur.role=$2) has_role,CASE WHEN $2 IN ('admin','city_admin','support','accountant') THEN EXISTS(SELECT 1 FROM staff_credentials sc WHERE sc.user_id=u.id AND sc.is_active=true) WHEN $2 IN ('merchant','rider') THEN EXISTS(SELECT 1 FROM partner_credentials pc WHERE pc.user_id=u.id AND pc.role=$2::user_role AND pc.is_active=true) ELSE true END credential_active,COALESCE((SELECT permissions FROM main_staff_permissions mp WHERE mp.user_id=u.id),'{}'::jsonb) staff_permissions FROM users u WHERE u.id=$1`,[decoded.sub,decoded.role]);if(!current.rowCount||Number(decoded.ver||0)!==Number(current.rows[0].session_version||0))return res.status(401).json({error:'SESSION_REVOKED'});if(!current.rows[0].has_role)return res.status(403).json({error:'ROLE_REVOKED'});if(!current.rows[0].credential_active&&!(decoded.role==='admin'&&current.rows[0].phone===ownerPhone))return res.status(401).json({error:'ACCOUNT_DISABLED'});const user={...decoded,phone:current.rows[0].phone,permissions:current.rows[0].staff_permissions||{}};const requiredPermission=mainStaffPermissionFor(req),isMainStaff=['support','accountant'].includes(user.role);if(isMainStaff&&requiredPermission&&user.permissions?.[requiredPermission]!==true)return res.status(403).json({error:'STAFF_PERMISSION_REQUIRED',permission:requiredPermission});if(roles.length&&!roles.includes(user.role)&&!(isMainStaff&&requiredPermission&&user.permissions?.[requiredPermission]===true))return res.status(403).json({error:'FORBIDDEN'});req.user=user;next()}catch(error){if(error?.code==='42P01'||error?.code==='42703')return res.status(503).json({error:'SESSION_MIGRATION_REQUIRED'});res.status(401).json({error:'INVALID_TOKEN'})}}); }
+const protectedPartnerAccessCodePaths=[
+  {pattern:/^\/v1\/admin\/(partner-credentials|merchants|riders)$/,role:'admin'},
+  {pattern:/^\/v1\/merchant\/rider-nominations$/,role:'merchant'}
+];
+app.use((req,res,next)=>{
+  if(req.method!=='POST')return next();
+  const policy=protectedPartnerAccessCodePaths.find(item=>item.pattern.test(req.path));
+  if(!policy)return next();
+  return auth(policy.role)(req,res,()=>{
+    if(!validStaffAccessCode(req.body?.accessCode,req.body?.phone))return res.status(400).json({error:'WEAK_PARTNER_ACCESS_CODE'});
+    next();
+  });
+});
 const cityPermissions = ['orders.read','orders.manage','orders.assign','riders.read','riders.manage','riders.availability.manage','fleet.read','fleet.manage','fleet.employment.manage','fleet.assets.manage','personnel.read','personnel.manage','personnel.documents.read','personnel.documents.manage','attendance.read','attendance.manage','attendance.settings.manage','attendance.access.manage','attendance.shifts.manage','attendance.corrections.manage','attendance.records.manage','payroll.read','payroll.manage','payroll.policy.manage','payroll.adjustments.manage','payroll.submit','treasury.read','treasury.manage','treasury.expenses.create','treasury.receipts.read','treasury.advances.create','treasury.settlements.create','partners.request'];
 function normalizePermissions(value = {}) { return Object.fromEntries(cityPermissions.map(key => [key, value[key] === true])); }
 function cityPermission(...permissions) { return asyncRoute(async (req, res, next) => {
