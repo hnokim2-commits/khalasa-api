@@ -5,16 +5,16 @@ import { basename, dirname, join, resolve } from 'node:path';
 import pg from 'pg';
 
 const { Pool } = pg;
-const databaseUrl = process.env.KHALASA_BACKUP_DATABASE_URL;
-const passphrase = process.env.KHALASA_BACKUP_PASSPHRASE;
-if (!databaseUrl) throw new Error('KHALASA_BACKUP_DATABASE_URL is required');
+const databaseUrl = process.env.KHALASA_BACKUP_DATABASE_URL || process.env.DATABASE_URL;
+const passphrase = process.env.KHALASA_BACKUP_PASSPHRASE || process.env.BACKUP_ENCRYPTION_PASSPHRASE;
+if (!databaseUrl) throw new Error('KHALASA_BACKUP_DATABASE_URL or DATABASE_URL is required');
 if (!passphrase || passphrase.length < 12) throw new Error('Backup passphrase must contain at least 12 characters');
 
 const projectRoot = resolve(dirname(new URL(import.meta.url).pathname.replace(/^\/(?:[A-Za-z]:)/, value => value.slice(1))), '..');
 const outputDirectory = resolve(projectRoot, '..', 'manual-backups');
 const pool = new Pool({
   connectionString: databaseUrl,
-  ssl: { rejectUnauthorized: process.env.KHALASA_BACKUP_DB_SSL_REJECT_UNAUTHORIZED !== 'false' },
+  ssl: { rejectUnauthorized: (process.env.KHALASA_BACKUP_DB_SSL_REJECT_UNAUTHORIZED || process.env.DB_SSL_REJECT_UNAUTHORIZED) !== 'false' },
   max: 1
 });
 
