@@ -1,88 +1,12 @@
-window.confirmPayment = async function () {
-  const customer = JSON.parse(localStorage.getItem('waslaCustomer') || 'null');
-  const session = window.KhalasaApi.session();
-  if (!customer || !session?.token) { openAuth(); return; }
-  if (!cart.length) { toast('السلة فارغة'); return; }
-  if (selectedPayment !== 'cod') { toast('الدفع الإلكتروني غير متاح حالياً. اختر الدفع عند الاستلام.'); return; }
-  if (cart.some(item => !item.apiProductId || !item.merchantId)) { toast('يوجد منتج تجريبي غير متاح للطلب حالياً. حدّث الصفحة واختر من المنتجات المتاحة.'); return; }
-  const merchantIds=[...new Set(cart.map(item=>item.merchantId))];
-  if(merchantIds.length!==1){toast('يجب أن تكون منتجات الطلب من محل واحد.');return;}
-  const submit = document.querySelector('#paymentModal .auth-submit');
-  submit.disabled = true; submit.textContent = 'جارٍ تأكيد الطلب…';
-  try {
-    const result = await window.KhalasaApi.request('/orders', {
-      method:'POST',
-      headers:{'x-idempotency-key':crypto.randomUUID().replace(/-/g,'_')},
-      body:JSON.stringify({
-        merchantId:merchantIds[0],
-        items:cart.map(item => ({ productId:item.apiProductId, qty:item.qty })),
-        deliveryAddress:document.getElementById('areaName').textContent || 'كفر صقر',
-        paymentMethod:selectedPayment
-      })
-    });
-    closePayment(); cart=[]; renderCart();
-    localStorage.setItem('waslaLastOrder', JSON.stringify({id:result.order.id,publicCode:result.order.public_code,deliveryOtp:result.order.deliveryOtp}));
-    toast(`تم إرسال طلبك إلى المحل برقم ${result.order.public_code}`);
-  } catch (error) {
-    toast(error.message === 'AUTH_REQUIRED' ? 'سجّل دخولك أولاً لإتمام الطلب' : 'تعذر إرسال الطلب إلى النظام المركزي. حاول مرة أخرى.');
-  } finally {
-    submit.disabled=false;
-    selectPayment(document.querySelector(`.payment-option[data-pay="${selectedPayment}"]`));
-  }
-};
-
-async function loadProductionCatalog(){
-  try{
-    const result=await window.KhalasaApi.request('/catalog');
-    if(!Array.isArray(result.products)||!result.products.length)return;
-    const artwork={food:['🍔','#fde9d6'],grocery:['🛒','#f4edd8'],pharmacy:['💊','#dff2e8'],gold:['💍','#f6efd5'],appliances:['🔌','#e7eef7']};
-    restaurants.splice(0,restaurants.length,...result.products.map((product,index)=>{
-      const [emoji,bg]=artwork[product.category]||['🛍️','#e4efe9'];
-      return {id:index+1,apiProductId:product.product_id,merchantId:product.merchant_id,name:product.merchant_name,category:product.category||'all',emoji,bg,rating:'جديد',time:'يُحدد بعد قبول الطلب',fee:'الدفع عند الاستلام',offer:'متاح الآن',item:product.product_name,price:Number(product.price)};
-    }));
-    cart=[];renderRestaurants();renderCart();
-  }catch(error){console.warn('Catalog unavailable',error.message);}
-}
-loadProductionCatalog();
-
-// Khalasa production API configuration.
-// Keep this value centralized so all web apps use the same backend.
-window.KHALASA_API_URL = "https://khalasa-api.onrender.com";
-
-window.khalasaFetch = async function khalasaFetch(path, options = {}) {
-  const apiUrl = window.KHALASA_API_URL.replace(/\/$/, "");
-  const requestUrl = path.startsWith("http") ? path : `${apiUrl}${path.startsWith("/") ? path : `/${path}`}`;
-  const requestOptions = {
-    ...options,
-    headers: {
-      Accept: "application/json",
-      "Content-Type": "application/json",
-      ...(options.headers || {}),
-    },
-  };
-
-  let lastError;
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    try {
-      // Render's starter instance may sleep. Wake it before the first API call.
-      if (attempt === 0 && !path.includes("/health")) {
-        await fetch(`${apiUrl}/health`, { mode: "cors", cache: "no-store" });
-      }
-      const response = await fetch(requestUrl, requestOptions);
-      const payload = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        throw new Error(payload.message || payload.error || `HTTP ${response.status}`);
-      }
-      return payload;
-    } catch (error) {
-      lastError = error;
-      if (attempt === 0) await new Promise((resolve) => setTimeout(resolve, 1800));
-    }
-  }
-
-  const message = lastError && lastError.message;
-  if (message === "Failed to fetch" || message === "Load failed" || message === "NetworkError when attempting to fetch resource.") {
-    throw new Error("تعذر الاتصال بخادم خالصة الآن. انتظر لحظات ثم أعد المحاولة وتأكد من اتصال الإنترنت.");
-  }
-  throw lastError || new Error("تعذر الاتصال بخادم خالصة.");
-};
+(function(){
+  const descriptions={'orders.read':'مشاهدة طلبات المدينة فقط دون تغييرها','orders.manage':'إسناد الطلبات للمندوبين ومتابعة حالتها','riders.read':'عرض بيانات وحالة مندوبي المدينة','riders.manage':'تشغيل المندوبين أو إيقاف استقبالهم للطلبات','partners.request':'رفع طلب إضافة محل أو مندوب إلى الإدارة الرئيسية'};
+  const box=document.querySelector('.permission-box');if(!box)return;
+  const style=document.createElement('style');style.textContent='.permission-box label{position:relative;padding:10px 38px 10px 10px!important;border:1px solid #d8e6df;border-radius:10px;background:#fff}.permission-box label:before{content:"○";position:absolute;right:12px;color:#8b9892;font-weight:900}.permission-box label.permission-on{background:#effaf4;border-color:#76c9a6}.permission-box label.permission-on:before{content:"✓";color:#087a51}.permission-help{display:block;color:#6e7c76;font-size:10px;margin:3px 0 0}.permission-presets{display:flex;gap:7px;flex-wrap:wrap;margin:9px 0}.permission-badge{display:inline-block;background:#e9f7f0;color:#087a51;border-radius:20px;padding:4px 8px;margin:3px;font-size:10px}.global-admin-badge{display:block;margin:8px 10px;padding:8px;border:1px solid #5fd09e;border-radius:10px;background:#e9fff4;color:#075d40;text-align:center;font-size:10px;font-weight:800}.global-access-banner{margin:0 0 14px;padding:13px;border-radius:12px;background:#e9fff4;border:1px solid #70cda6;color:#075d40;font-weight:800}';document.head.appendChild(style);
+  const adminUser=document.querySelector('.admin-user');if(adminUser)adminUser.insertAdjacentHTML('afterend','<span class="global-admin-badge">✓ صلاحية الإدارة الرئيسية<br>جميع المدن دون استثناء</span>');
+  const asideNote=document.querySelector('.aside-note');if(asideNote)asideNote.innerHTML='الإدارة الرئيسية<br>نطاق العمل: جميع المدن';
+  const cityPage=document.getElementById('admin-cityUsers');if(cityPage)cityPage.insertAdjacentHTML('afterbegin','<div class="global-access-banner">🌐 حساب الإدارة الرئيسية الحالي يملك صلاحية شاملة لعرض وإدارة جميع المدن. القيود أدناه تنطبق فقط على مستخدمي إدارات المدن.</div>');
+  box.insertAdjacentHTML('afterbegin','<div class="permission-presets"><button class="table-btn" type="button" data-permission-preset="all">✓ كل الصلاحيات</button><button class="table-btn" type="button" data-permission-preset="view">👁 عرض فقط</button><button class="table-btn" type="button" data-permission-preset="none">○ إلغاء الكل</button></div>');
+  function decorate(){box.querySelectorAll('label').forEach(label=>{const input=label.querySelector('input[name="cityPermission"]');if(!input)return;label.classList.toggle('permission-on',input.checked);label.title=descriptions[input.value]||'';if(!label.querySelector('.permission-help')){const help=document.createElement('small');help.className='permission-help';help.textContent=descriptions[input.value]||'';label.append(help)}})}
+  box.addEventListener('change',decorate);box.querySelectorAll('[data-permission-preset]').forEach(button=>button.onclick=()=>{const preset=button.dataset.permissionPreset;box.querySelectorAll('input[name="cityPermission"]').forEach(input=>input.checked=preset==='all'||(preset==='view'&&input.value.endsWith('.read')));decorate()});decorate();
+  const list=document.getElementById('cityUsersList');if(list)new MutationObserver(()=>{list.querySelectorAll('.city-user-card>div:first-child small:last-child').forEach(line=>{if(line.dataset.badged)return;line.dataset.badged='1';const values=line.textContent.split('،').map(x=>x.trim()).filter(Boolean);line.replaceChildren();values.forEach(value=>{const badge=document.createElement('span');badge.className='permission-badge';badge.textContent='✓ '+value;line.append(badge)})})}).observe(list,{childList:true,subtree:true});
+})();

@@ -1,1 +1,66 @@
-.payment-card h2{margin-bottom:13px}.payment-total{display:flex;justify-content:space-between;align-items:center;background:#f8f6f0;padding:11px 13px;border-radius:10px;font-size:12px;margin-bottom:14px}.payment-total b{font-size:17px}.payment-options{display:grid;gap:8px}.payment-option{display:flex;align-items:center;gap:10px;text-align:right;padding:11px;background:#fff;border:1px solid var(--line);border-radius:11px}.payment-option.selected{border-color:var(--green);background:#f5fbf7}.pay-icon{display:grid;place-items:center;width:35px;height:35px;background:#f5ead8;border-radius:10px;font-size:18px}.wallet-icon{color:#fff;background:#e4543e;font-weight:800}.payment-option div{flex:1}.payment-option b,.payment-option small{display:block}.payment-option b{font-size:12px}.payment-option small{font-size:10px;color:var(--muted)}.payment-option i{font-style:normal;width:19px;height:19px;border:1px solid #c9d4cd;border-radius:50%;color:transparent;display:grid;place-items:center;font-size:11px}.payment-option.selected i{background:var(--green);border-color:var(--green);color:#fff}.payment-note{margin:13px 0 8px;padding:9px;background:#fff8df;color:#82682d;border-radius:8px;font-size:10px;line-height:1.7}
+(function () {
+  const approvals = document.getElementById('admin-approvals');
+  if (!approvals || document.getElementById('partnerCredentialForm')) return;
+
+  approvals.insertAdjacentHTML('afterbegin', `
+    <form id="partnerCredentialForm" class="panel" style="margin-bottom:16px;padding:24px">
+      <div class="panel-head">
+        <div>
+          <h2>إنشاء رمز دخول شريك</h2>
+          <p>أنشئ رمزًا للمحل أو المندوب المعتمد، ثم سلّمه لصاحب الحساب مباشرة.</p>
+        </div>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:14px;margin:20px 0">
+        <label style="display:grid;gap:8px;font-weight:700">نوع الحساب
+          <select id="partnerCredentialRole" style="width:100%;padding:13px;border:1px solid #cadbd4;border-radius:10px;background:#fff">
+            <option value="merchant">محل</option>
+            <option value="rider">مندوب</option>
+          </select>
+        </label>
+        <label style="display:grid;gap:8px;font-weight:700">رقم الهاتف
+          <input id="partnerCredentialPhone" inputmode="numeric" pattern="01[0-9]{9}" placeholder="01xxxxxxxxx" style="width:100%;padding:13px;border:1px solid #cadbd4;border-radius:10px" required>
+        </label>
+        <label style="display:grid;gap:8px;font-weight:700">رمز دخول قوي
+          <input id="partnerCredentialCode" type="password" minlength="10" autocomplete="new-password" placeholder="10 أحرف على الأقل" style="width:100%;padding:13px;border:1px solid #cadbd4;border-radius:10px" required>
+        </label>
+      </div>
+      <button class="primary" type="submit">حفظ رمز الدخول</button>
+      <p id="partnerCredentialStatus" style="margin-top:12px" aria-live="polite"></p>
+    </form>
+  `);
+
+  document.getElementById('partnerCredentialForm').addEventListener('submit', async function (event) {
+    event.preventDefault();
+    const status = document.getElementById('partnerCredentialStatus');
+    const token = localStorage.getItem('khalasaStaffToken') || '';
+    const api = window.KHALASA_API_BASE_URL || location.origin;
+    status.textContent = 'جارٍ الحفظ…';
+
+    try {
+      const response = await fetch(`${api}/v1/admin/partner-credentials`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          role: document.getElementById('partnerCredentialRole').value,
+          phone: document.getElementById('partnerCredentialPhone').value.trim(),
+          accessCode: document.getElementById('partnerCredentialCode').value
+        })
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        status.textContent = body.error === 'PARTNER_ACCOUNT_NOT_FOUND'
+          ? 'لا يوجد حساب شريك مطابق لهذا الرقم والنوع.'
+          : 'تعذر حفظ الرمز. تحقق من البيانات والصلاحية.';
+        return;
+      }
+      this.reset();
+      status.textContent = 'تم حفظ رمز دخول الشريك بنجاح.';
+      if (typeof window.toast === 'function') window.toast('تم حفظ رمز دخول الشريك بأمان');
+    } catch (_) {
+      status.textContent = 'تعذر الاتصال بالخادم. حاول مرة أخرى.';
+    }
+  });
+})();

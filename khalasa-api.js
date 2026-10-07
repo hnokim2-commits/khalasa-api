@@ -1,2 +1,25 @@
-.location-help{font-size:12px;color:#718078;margin:0 0 12px}.locate-me{width:100%;border:1px solid #157a5b;background:#e8f6ef;color:#157a5b;padding:11px;border-radius:10px;font:700 13px Cairo,Arial,sans-serif;cursor:pointer;margin-bottom:10px}
-.sponsored-section{padding:0 5% 26px}.sponsored-section .section-heading{margin-bottom:12px}.sponsored-label{font-size:10px;color:#8b5a14;background:#fff1cd;padding:5px 9px;border-radius:999px}.sponsored-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}.sponsored-card{display:grid;grid-template-columns:78px 1fr;gap:11px;align-items:center;background:#fff;border:1px solid #eadfca;border-radius:13px;padding:9px;cursor:pointer;box-shadow:0 4px 15px #43300b08}.sponsored-art{height:78px;display:grid;place-items:center;font-size:38px;border-radius:10px;background:var(--ad-bg);position:relative}.sponsored-art span{position:absolute;top:5px;right:5px;background:#5a4218;color:white;border-radius:5px;padding:2px 5px;font-size:8px}.sponsored-card h3{font-size:12px;margin:0 0 3px}.sponsored-card p{font-size:10px;color:#718078;margin:0 0 7px}.sponsored-card button{border:0;background:#157a5b;color:#fff;border-radius:6px;font:700 10px Cairo,Arial,sans-serif;padding:5px 8px;cursor:pointer}@media(max-width:760px){.sponsored-section{padding:0 16px 20px}.sponsored-grid{display:flex;overflow-x:auto;padding-bottom:3px}.sponsored-card{min-width:245px}}
+# النشر التلقائي لمنصة خالصة
+
+هذه الإعدادات تلغي الحاجة إلى رفع المجلد يدويًا في Cloudflare. كل تحديث يصل إلى الفرع `main` في GitHub يتم فحصه ثم نشره تلقائيًا إلى Worker باسم `khalasa-web`.
+
+## الإعداد لمرة واحدة
+
+1. أنشئ مستودع GitHub باسم `khalasa-web` وارفع محتويات هذا المجلد إليه.
+2. من Cloudflare افتح **My Profile > API Tokens > Create Token** واختر قالب **Edit Cloudflare Workers**.
+3. انسخ **Account ID** من صفحة حساب Cloudflare.
+4. في مستودع GitHub افتح **Settings > Secrets and variables > Actions**.
+5. أضف السرَّين التاليين:
+   - `CLOUDFLARE_API_TOKEN`
+   - `CLOUDFLARE_ACCOUNT_ID`
+6. افتح **Actions > Deploy Khalasa Web > Run workflow** لأول نشر.
+
+## الحماية المضافة
+
+- يفشل النشر إذا كانت إحدى صفحات العميل أو المحل أو المندوب أو الإدارة مفقودة.
+- يفشل النشر إذا ظهر الاسم الخاطئ «خلاصة» داخل ملفات الواجهة.
+- لا يعمل أكثر من نشر إنتاجي واحد في الوقت نفسه.
+- يحتفظ GitHub بسجل كل نسخة، ويمكن الرجوع إلى أي إصدار سابق.
+
+## رابط الإنتاج
+
+`https://khalasa-web.h-nokim2.workers.dev`

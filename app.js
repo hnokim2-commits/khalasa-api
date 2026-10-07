@@ -1,2 +1,101 @@
-.admin-actions{position:relative}.alerts-popover{display:none;position:absolute;top:44px;left:0;width:290px;background:#fff;border:1px solid #e8ece8;border-radius:12px;box-shadow:0 12px 35px #17261f22;padding:13px;z-index:5}.alerts-popover.show{display:block}.alerts-popover h3{margin:0 0 8px;font-size:13px}.alerts-popover ul{list-style:none;padding:0;margin:0}.alerts-popover li{display:flex;gap:7px;border-top:1px solid #e8ece8;padding:9px 0;font-size:10px;color:#415249}.alerts-popover li i{font-style:normal;color:#f27742}.alerts-popover button{width:auto;height:auto;border:0;background:transparent;color:#157a5b;font:700 10px Cairo,Arial,sans-serif;padding:4px 0}.all-read{justify-content:center;color:#718078!important}.live-map{padding:0;overflow:hidden}.live-map>.panel-head{padding:17px;margin:0}.map-live{font-size:10px;background:#e8f6ef;color:#157a5b;padding:5px 8px;border-radius:7px}.map-canvas{height:390px;position:relative;overflow:hidden;background:linear-gradient(135deg,#ecf3df 0 47%,#e8f5ea 47% 100%)}.map-canvas:before,.map-canvas:after{content:'';position:absolute;background:#bed8ef;border-radius:999px;transform:rotate(-29deg)}.map-canvas:before{width:560px;height:26px;top:49%;right:-90px}.map-canvas:after{width:300px;height:16px;top:28%;right:27%;transform:rotate(30deg)}.street{position:absolute;background:#fff8;border-radius:99px;transform:rotate(25deg)}.s1{width:520px;height:13px;top:24%;right:-40px}.s2{width:370px;height:12px;top:75%;right:11%;transform:rotate(-38deg)}.s3{width:310px;height:10px;top:52%;right:34%;transform:rotate(82deg)}.map-pin{position:absolute;z-index:1;text-align:center;transform:translate(50%,-50%)}.map-pin b{display:grid;place-items:center;width:37px;height:37px;border-radius:50% 50% 50% 0;color:#fff;transform:rotate(-45deg);font-size:17px;box-shadow:0 5px 11px #17261f30}.map-pin small{display:block;margin-top:5px;background:#fff;border-radius:5px;padding:2px 5px;font-size:9px;white-space:nowrap}.store-pin b{background:#157a5b}.rider-pin b{background:#4f89dd}.order-pin b{background:#fb6d3a}.map-center{position:absolute;top:46%;right:43%;font-size:18px;font-weight:800;color:#31574699}.map-legend{display:flex;gap:18px;padding:12px 17px;font-size:11px}.map-legend i{display:inline-block;width:8px;height:8px;border-radius:50%;margin-left:4px}.store-dot{background:#157a5b}.rider-dot{background:#4f89dd}.order-dot{background:#fb6d3a}.ratings-summary{display:grid;grid-template-columns:repeat(3,1fr);gap:13px;margin-bottom:15px}.ratings-summary span,.ratings-summary small{display:block;color:#718078;font-size:11px}.rating-number{display:block;font-size:27px;margin:5px 0}.rating-number i{font-style:normal;color:#f5ae22}.rating-list{list-style:none;padding:0;margin:0}.rating-list li{display:grid;grid-template-columns:auto 1fr auto auto;gap:10px;align-items:center;border-top:1px solid #e8ece8;padding:12px 0}.avatar{display:grid;place-items:center;width:31px;height:31px;border-radius:50%;background:#e8f6ef;color:#157a5b;font-weight:800}.rating-list b{font-size:12px}.rating-list p{font-size:10px;margin:3px 0;color:#718078}.rating-list strong{font-size:12px;color:#e5a018}.low-rating{color:#d2663a!important}@media(max-width:820px){.ratings-summary{grid-template-columns:1fr}.rating-list li{grid-template-columns:auto 1fr auto}.rating-list .table-btn{grid-column:2/-1;width:max-content}.map-canvas{height:300px}}
-.launch-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}.launch-card{display:flex;flex-direction:column}.launch-head{display:flex;gap:9px;align-items:flex-start}.launch-head>span{font-size:26px}.launch-head h2{font-size:15px}.launch-head p{font-size:10px;margin:2px 0;color:#718078}.checklist{list-style:none;padding:0;margin:15px 0;display:grid;gap:7px;font-size:11px}.checklist li{background:#f8faf8;border-radius:7px;padding:7px}.checklist .done{color:#157a5b;background:#eaf6ee}.launch-card .primary{margin-top:auto}.launch-summary{margin-top:14px;background:#fff1d8;border-radius:10px;padding:13px;font-size:12px;color:#81591a}.launch-summary b{margin-left:6px}@media(max-width:820px){.launch-grid{grid-template-columns:1fr}}
+(function () {
+  const merchantSection = document.getElementById('admin-partners');
+  const merchantNav = document.querySelector('[data-admin-page="partners"]');
+  if (!merchantSection || !merchantNav || document.getElementById('admin-riders')) return;
+
+  merchantNav.innerHTML = '🏪 <span>المحلات</span>';
+  if (window.adminTitles) window.adminTitles.partners = 'المحلات';
+  const riderNav = document.createElement('button');
+  riderNav.dataset.adminPage = 'riders';
+  riderNav.innerHTML = '🛵 <span>المندوبون</span>';
+  riderNav.addEventListener('click', function () { window.adminPage('riders', riderNav); });
+  merchantNav.insertAdjacentElement('afterend', riderNav);
+
+  const riderSection = document.createElement('section');
+  riderSection.className = 'admin-page';
+  riderSection.id = 'admin-riders';
+  riderSection.innerHTML = '<div class="panel"><div class="panel-head"><div><h2>المندوبون</h2><p>حسابات المندوبين وحالة استقبال الطلبات.</p></div><button class="table-btn" type="button" id="refreshRiders">تحديث ↻</button></div><div class="table-wrap"><table><thead><tr><th>الاسم</th><th>النوع</th><th>الحالة</th><th>النطاق</th><th>إجراء</th></tr></thead><tbody id="liveRidersBody"><tr><td colspan="5">جارٍ التحميل...</td></tr></tbody></table></div></div>';
+  document.querySelector('main').appendChild(riderSection);
+  riderSection.querySelector('.panel').insertAdjacentHTML('beforebegin','<section class="panel" style="margin-bottom:16px"><div class="panel-head"><div><h2>طلبات انضمام المندوبين</h2><p>طلبات التسجيل الذاتي منفصلة عن ترشيحات المحلات، ولا يتم التشغيل قبل موافقة الإدارة.</p></div><button class="table-btn" type="button" id="refreshRiderApplications">تحديث ↻</button></div><div id="riderApplications"><p class="loading">جارٍ تحميل الطلبات...</p></div></section>');
+
+  const base = window.KHALASA_API_BASE_URL || location.origin;
+  const merchantBody = merchantSection.querySelector('tbody');
+  const riderBody = document.getElementById('liveRidersBody');
+  const text = value => String(value == null ? '' : value);
+  function cell(value) { const td = document.createElement('td'); td.textContent = text(value); return td; }
+  function statusCell(label, active) { const td = document.createElement('td'), span = document.createElement('span'); span.className = 'tag ' + (active ? 'active-tag' : 'trial-tag'); span.textContent = label; td.appendChild(span); return td; }
+  function actionCell(message) { const td = document.createElement('td'), button = document.createElement('button'); button.className = 'table-btn'; button.type = 'button'; button.textContent = 'عرض'; button.addEventListener('click', () => window.toast(message)); td.appendChild(button); return td; }
+  function emptyRow(body, message) { const tr = document.createElement('tr'), td = cell(message); td.colSpan = 5; tr.appendChild(td); body.appendChild(tr); }
+
+  async function loadSeparatedPartners() {
+    try {
+      const response = await fetch(base + '/v1/admin/partners', { headers: { Authorization: 'Bearer ' + (localStorage.getItem('khalasaStaffToken') || '') } });
+      if (!response.ok) throw new Error('load failed');
+      const data = await response.json();
+      merchantBody.replaceChildren(); riderBody.replaceChildren();
+      (data.merchants || []).forEach(merchant => {
+        const tr = document.createElement('tr'), name = cell(merchant.display_name), small = document.createElement('small');
+        small.style.display = 'block'; small.textContent = [merchant.owner_name, merchant.phone].filter(Boolean).join(' · '); name.appendChild(small);
+        tr.append(name, cell(merchant.category), statusCell(merchant.is_accepting_orders ? 'نشط' : 'متوقف', merchant.is_accepting_orders), cell([merchant.governorate, merchant.city_name].filter(Boolean).join('، ')), actionCell('ملف المحل متصل بقاعدة البيانات'));
+        merchantBody.appendChild(tr);
+      });
+      (data.riders || []).forEach(rider => {
+        const tr = document.createElement('tr'), name = cell(rider.full_name), small = document.createElement('small');
+        small.style.display = 'block'; small.textContent = text(rider.phone); name.appendChild(small);
+        tr.append(name, cell('مندوب'), statusCell(rider.is_available ? 'متاح' : 'غير متاح', rider.is_available), cell([rider.governorate, rider.city_name].filter(Boolean).join('، ')), actionCell('ملف المندوب متصل بقاعدة البيانات'));
+        riderBody.appendChild(tr);
+      });
+      if (!merchantBody.children.length) emptyRow(merchantBody, 'لا توجد محلات بعد.');
+      if (!riderBody.children.length) emptyRow(riderBody, 'لا يوجد مندوبون بعد.');
+    } catch (_) {
+      merchantBody.replaceChildren(); riderBody.replaceChildren();
+      emptyRow(merchantBody, 'تعذر تحميل المحلات.'); emptyRow(riderBody, 'تعذر تحميل المندوبين.');
+    }
+  }
+  async function loadRiderApplications() {
+    const box=document.getElementById('riderApplications');
+    try{
+      const response=await fetch(base+'/v1/admin/rider-applications',{headers:{Authorization:'Bearer '+(localStorage.getItem('khalasaStaffToken')||'')}});
+      if(!response.ok)throw new Error(); const data=await response.json(); box.replaceChildren();
+      const pending=(data.applications||[]).filter(item=>item.status==='pending');
+      pending.forEach(item=>{const card=document.createElement('article');card.className='city-user-card';const info=document.createElement('div');const title=document.createElement('b');title.textContent=item.full_name;const details=document.createElement('small');details.textContent=[item.phone,item.governorate,item.city_name].filter(Boolean).join(' · ');const source=document.createElement('small');source.textContent=item.source==='merchant'?'🏪 ترشيح محل'+(item.nominating_merchant?' — '+item.nominating_merchant:''):'📱 تسجيل ذاتي بالجوال';info.append(title,details,source);const actions=document.createElement('div');actions.className='city-user-actions';const approve=document.createElement('button');approve.className='primary';approve.textContent='✓ موافقة';approve.onclick=()=>reviewRiderApplication(item.id,'approved');const reject=document.createElement('button');reject.className='table-btn';reject.textContent='رفض';reject.onclick=()=>reviewRiderApplication(item.id,'rejected');actions.append(approve,reject);card.append(info,actions);box.append(card)});
+      if(!pending.length){const p=document.createElement('p');p.className='loading';p.textContent='لا توجد طلبات انضمام معلقة.';box.append(p)}
+    }catch(_){box.textContent='تعذر تحميل طلبات الانضمام.'}
+  }
+  async function reviewRiderApplication(id,status){const response=await fetch(base+'/v1/admin/rider-applications/'+encodeURIComponent(id),{method:'PATCH',headers:{'Content-Type':'application/json',Authorization:'Bearer '+(localStorage.getItem('khalasaStaffToken')||'')},body:JSON.stringify({status})});if(!response.ok)return window.toast('تعذر تحديث الطلب');window.toast(status==='approved'?'تم اعتماد المندوب':'تم رفض الطلب');await Promise.all([loadRiderApplications(),loadSeparatedPartners()]);}
+  const refreshRiders = document.getElementById('refreshRiders');
+  const addRider = document.createElement('button');
+  addRider.className = 'primary'; addRider.type = 'button'; addRider.textContent = '+ إضافة مندوب';
+  refreshRiders.insertAdjacentElement('beforebegin', addRider);
+  document.body.insertAdjacentHTML('beforeend', '<section id="riderAddModal" class="apl-modal"><form id="riderAddForm" class="apl-card"><h2>إضافة مندوب جديد</h2><p>أنشئ حساب المندوب ورمز دخوله إلى تطبيق المندوب.</p><div class="apl-grid"><label>اسم المندوب<input id="riderAddName" required></label><label>رقم الهاتف<input id="riderAddPhone" inputmode="numeric" pattern="01[0-9]{9}" placeholder="01xxxxxxxxx" required></label><label>المدينة<select id="riderAddCity" required></select></label><label>وسيلة التوصيل<select id="riderAddVehicle"><option value="motorcycle">دراجة نارية</option><option value="bicycle">دراجة</option><option value="car">سيارة</option></select></label><label>رمز دخول قوي<input id="riderAddCode" type="password" minlength="10" autocomplete="new-password" required></label></div><p id="riderAddStatus" class="apl-error" aria-live="polite"></p><div class="apl-actions"><button type="button" class="table-btn" id="riderAddClose">إلغاء</button><button class="primary">إنشاء المندوب</button></div></form></section>');
+  const riderModal = document.getElementById('riderAddModal'), riderForm = document.getElementById('riderAddForm'), riderStatus = document.getElementById('riderAddStatus');
+  addRider.addEventListener('click', async function () {
+    riderStatus.textContent = '';
+    try {
+      const response = await fetch(base + '/v1/admin/cities', { headers: { Authorization: 'Bearer ' + (localStorage.getItem('khalasaStaffToken') || '') } });
+      if (!response.ok) throw new Error();
+      const data = await response.json(), select = document.getElementById('riderAddCity');
+      select.replaceChildren();
+      (data.cities || []).filter(city => city.is_active).forEach(city => { const option = document.createElement('option'); option.value = city.id; option.textContent = city.governorate + ' — ' + city.name; select.appendChild(option); });
+      riderModal.classList.add('show');
+    } catch (_) { window.toast('تعذر تحميل المدن'); }
+  });
+  document.getElementById('riderAddClose').addEventListener('click', () => riderModal.classList.remove('show'));
+  riderForm.addEventListener('submit', async function (event) {
+    event.preventDefault(); riderStatus.textContent = 'جارٍ إنشاء المندوب...';
+    const submit = riderForm.querySelector('.apl-actions .primary'); submit.disabled = true;
+    try {
+      const response = await fetch(base + '/v1/admin/riders', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + (localStorage.getItem('khalasaStaffToken') || '') }, body: JSON.stringify({ fullName: document.getElementById('riderAddName').value.trim(), phone: document.getElementById('riderAddPhone').value.trim(), cityId: document.getElementById('riderAddCity').value, vehicleType: document.getElementById('riderAddVehicle').value, accessCode: document.getElementById('riderAddCode').value }) });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || 'CREATE_FAILED');
+      riderModal.classList.remove('show'); riderForm.reset(); window.toast('تم إنشاء المندوب بنجاح'); await loadSeparatedPartners();
+    } catch (error) {
+      riderStatus.textContent = error.message === 'PHONE_BELONGS_TO_ANOTHER_ROLE' ? 'رقم الهاتف مستخدم لحساب آخر.' : error.message === 'RIDER_ALREADY_EXISTS' ? 'هذا المندوب موجود بالفعل.' : 'تعذر إنشاء المندوب. راجع البيانات وحاول مجددًا.';
+    } finally { submit.disabled = false; }
+  });
+  refreshRiders.addEventListener('click', loadSeparatedPartners);
+  document.getElementById('refreshRiderApplications').addEventListener('click',loadRiderApplications);
+  const previousAdminPage = window.adminPage;
+  window.adminPage = function (page, button) { previousAdminPage(page, button); if (page === 'partners') loadSeparatedPartners(); if(page==='riders')Promise.all([loadSeparatedPartners(),loadRiderApplications()]); };
+  setTimeout(()=>Promise.all([loadSeparatedPartners(),loadRiderApplications()]), 950);
+})();
