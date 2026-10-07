@@ -84,8 +84,15 @@ const envelope = {
 };
 await mkdir(outputDirectory, { recursive: true });
 const output = join(outputDirectory, `khalasa-${timestamp()}.kbackup`);
-await writeFile(output, JSON.stringify(envelope), { flag: 'wx' });
+const serializedEnvelope = JSON.stringify(envelope);
+await writeFile(output, serializedEnvelope, { flag: 'wx' });
+const tablesCount = backup.tables.length;
+const rowsCount = backup.tables.reduce((sum, table) => sum + table.rows.length, 0);
+const backupSizeBytes = Buffer.byteLength(serializedEnvelope);
+const sha256 = crypto.createHash('sha256').update(serializedEnvelope).digest('hex');
 process.stdout.write(`Encrypted backup created: ${basename(output)}\n`);
-process.stdout.write(`Tables: ${backup.tables.length}; rows: ${backup.tables.reduce((sum, table) => sum + table.rows.length, 0)}\n`);
+process.stdout.write(`Tables: ${tablesCount}; rows: ${rowsCount}; bytes: ${backupSizeBytes}\n`);
+process.stdout.write(`SHA-256: ${sha256}\n`);
+process.stdout.write(`Backup confirmation: ${JSON.stringify({ backupName: basename(output), tablesCount, rowsCount, backupSizeBytes, sha256 })}\n`);
 await pool.end();
 
