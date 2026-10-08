@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const LOCK_ID = 170012;
-const DEFAULT_INTERVAL_HOURS = 24;
+const DEFAULT_INTERVAL_HOURS = 12;
 const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024;
 
 function quoteIdentifier(value) { return `"${String(value).replaceAll('"', '""')}"`; }
