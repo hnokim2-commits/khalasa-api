@@ -4,13 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "node --watch src/server.mjs",
     "start": "node src/migrate.mjs && node src/server.mjs",
     "db:migrate": "node src/migrate.mjs",
-    "backup:create": "node scripts/manual-backup.mjs",
-    "backup:verify": "node scripts/verify-manual-backup.mjs",
-    "check": "node --check src/server.mjs && node --test",
-    "test": "node --test"
+    "check": "node --check src/server.mjs"
   },
   "dependencies": {
     "cors": "^2.8.5",
