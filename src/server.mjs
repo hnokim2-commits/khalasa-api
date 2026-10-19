@@ -10,6 +10,7 @@ import { startAutomatedBackups } from './automated-backup.mjs';
 import { createLocalDocumentStorage } from './local-document-storage.mjs';
 import { registerOrderMessages } from './order-messages.mjs';
 import { registerOrderVoice } from './order-voice.mjs';
+import { storageFailureCode } from './storage-failure.mjs';
 const { Pool } = pg;
 
 const required = ['DATABASE_URL', 'JWT_SECRET'];
@@ -205,7 +206,7 @@ function hasExpectedSignature(buffer,mimeType){
 function decodeBase64(raw){if(!raw||raw.length%4!==0||!/^[A-Za-z0-9+/]+={0,2}$/.test(raw))return null;try{const buffer=Buffer.from(raw,'base64');return buffer.toString('base64').replace(/=+$/,'')===raw.replace(/=+$/,'')?buffer:null;}catch{return null;}}
 function validImageDataUrl(value,maxBytes=524288){if(!value)return true;const match=/^data:image\/(jpeg|png|webp);base64,([A-Za-z0-9+/=]+)$/.exec(String(value));if(!match)return false;const mimeType=`image/${match[1]}`,buffer=decodeBase64(match[2]);return !!buffer&&buffer.length<=maxBytes&&hasExpectedSignature(buffer,mimeType);}
 function decodeDocument(body,kind){const documentType=String(body.documentType||''),mimeType=String(body.mimeType||''),originalName=String(body.fileName||'document').replace(/[^\p{L}\p{N}._-]/gu,'_').slice(0,120),raw=String(body.dataBase64||'').replace(/^data:[^;]+;base64,/, '');if(!documentTypes[kind].includes(documentType)||!['image/jpeg','image/png','application/pdf'].includes(mimeType)||!raw)return null;const buffer=decodeBase64(raw);if(!buffer||!buffer.length||buffer.length>4194304||!hasExpectedSignature(buffer,mimeType))return null;return{documentType,mimeType,originalName,buffer};}
-async function putPrivateObject(path,file){if(localDocumentStorage)return localDocumentStorage.put(path,file);const{url,key,bucket}=storageConfig(),response=await fetch(`${url}/storage/v1/object/${bucket}/${path}`,{method:'PUT',headers:{Authorization:`Bearer ${key}`,apikey:key,'Content-Type':file.mimeType,'x-upsert':'true'},body:file.buffer});if(!response.ok)throw new Error(`PRIVATE_STORAGE_UPLOAD_FAILED_${response.status}`);}
+async function putPrivateObject(path,file){if(localDocumentStorage)return localDocumentStorage.put(path,file);const{url,key,bucket}=storageConfig(),response=await fetch(`${url}/storage/v1/object/${bucket}/${path}`,{method:'PUT',headers:{Authorization:`Bearer ${key}`,apikey:key,'Content-Type':file.mimeType,'x-upsert':'true'},body:file.buffer});if(!response.ok){const detail=await response.json().catch(()=>null);throw new Error(storageFailureCode(response.status,detail));}}
 async function signedPrivateUrl(path){if(localDocumentStorage)return localDocumentStorage.url(path);const{url,key,bucket}=storageConfig(),response=await fetch(`${url}/storage/v1/object/sign/${bucket}/${path}`,{method:'POST',headers:{Authorization:`Bearer ${key}`,apikey:key,'Content-Type':'application/json'},body:JSON.stringify({expiresIn:300})}),data=await response.json();if(!response.ok||!data.signedURL)throw new Error('PRIVATE_STORAGE_SIGN_FAILED');return data.signedURL.startsWith('http')?data.signedURL:`${url}/storage/v1${data.signedURL}`;}
 const publicCode = () => `KH-${Date.now().toString(36).toUpperCase()}-${crypto.randomBytes(2).toString('hex').toUpperCase()}`;
 const legacyOtpHash = otp => crypto.createHash('sha256').update(String(otp)).digest('hex');
