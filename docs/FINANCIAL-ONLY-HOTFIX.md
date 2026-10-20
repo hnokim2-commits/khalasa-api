@@ -31,3 +31,17 @@ TEST-FINANCIAL-HOTFIX-HTTP-LOCAL.ps1 builds a fresh synthetic full-schema Postgr
 Latest full branch suite119 tests:114 pass, same5 baseline failures. Targeted19/19 pass; these results are distinct, not an all-green full-suite claim.
 
 User supplied **FINANCIAL_HOTFIX_LOCAL_HTTP_PASS,12 checks**, synthetic full-schema PostgreSQL, real API admin/merchant/rider login and role checks,20 identical financial POSTs, payload mismatch, replay and overspend race. API and container `khalasa-hotfix-http-cfee18c3d933` stopped. No source connection or real payment. Preload Windows import path was corrected to a file:// URL before the successful run. No production deployment approval is implied.
+
+## Subsequent partner-code policy work (not deployed)
+
+User approved addressing the three existing partner-policy gaps separately without changing current passwords/login or merchant activation. Local changes validate NEW application/creation/reset codes using the existing shared policy plus a72-byte bcrypt limit; protected routes authenticate first. Recovery compares the replacement against the stored account phone inside the transaction, before updating credentials. Existing partner login is not intercepted; no existing hash/session is modified by applying code changes. No SQL migration added.
+
+Added4 executable middleware/recovery tests. Current full suite:123 tests,121 pass,2 fail. The3 partner-policy assertions now pass; the remaining2 still require the intentionally deferred merchant activation rules. No skip or false all-green claim. Source syntax check passed.
+
+Prepared TEST-HOTFIX-PARTNER-POLICY-LOCAL.ps1:25 combined synthetic full-HTTP financial/policy/rollback checks expected; NOT yet run. Existing local merchant fixture deliberately has a legacy phone-derived password to prove login remains possible, while NEW weak/phone-derived/over72-byte codes and weak recovery replacements are refused without changing its hash/session. No production credentials, data or consent records are used.
+
+## Final combined evidence — 2026-10-20
+
+The preceding "not yet run" entries describe preparation history, not current status. User supplied FINANCIAL_HOTFIX_POLICY_AND_ROLLBACK_PASS:25 checks, partnerPolicyTested=true, existingLegacyLoginPreserved=true, rollbackTested=true. Container khalasa-hotfix-http-b8215bb1747e and API stopped. Synthetic full-schema PostgreSQL and real local API only; sourceConnected=false, realPayment=false, externalFetchDisabledInApi=true, loopbackOnly=true. Old baseline reads the additive schema and rejects reused keys rather than replaying success; no schema downgrade tested or proposed. This is not production/UI/OTP/document/provider certification.
+
+Agent reran source syntax and the canonical suite before committing:123 tests,121 pass,2 fail. The remaining failures are precisely the deferred merchant-activation requirements; no tests skipped. Remote publication and exact-candidate staging deployment remain pending. Do not replace the broader staging frontend/API pairing or deploy production implicitly.
