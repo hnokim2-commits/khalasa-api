@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 
-const server=await readFile(new URL('../src/server.mjs',import.meta.url),'utf8');
+const server=(await readFile(new URL('../src/server.mjs',import.meta.url),'utf8'))+(await readFile(new URL('../src/financial-transactions.mjs',import.meta.url),'utf8'));
 const migration=await readFile(new URL('../migrations/0031_financial_request_idempotency.sql',import.meta.url),'utf8');
 test('financial writes require and claim an idempotency key',()=>{
   assert.match(server,/FINANCIAL_REQUEST_ALREADY_SUBMITTED/);
