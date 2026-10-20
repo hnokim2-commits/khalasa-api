@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 
-const server=await readFile(new URL('../src/server.mjs',import.meta.url),'utf8');
+const server=(await readFile(new URL('../src/server.mjs',import.meta.url),'utf8'))+(await readFile(new URL('../src/advance-settlements.mjs',import.meta.url),'utf8'));
 const migration=await readFile(new URL('../migrations/0038_branch_cash_advances.sql',import.meta.url),'utf8');
 
 test('cash advances keep one unresolved advance per employee',()=>{

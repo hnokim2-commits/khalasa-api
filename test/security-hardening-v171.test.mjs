@@ -17,7 +17,8 @@ test('financial idempotency storage requires a verified active session first', (
   assert.match(middleware, /jwt\.verify/);
   assert.match(middleware, /account_status='active'/);
   assert.match(middleware, /session_version=\$3/);
-  assert.ok(middleware.indexOf('jwt.verify') < middleware.indexOf('INSERT INTO financial_request_keys'));
+  assert.ok(middleware.indexOf('jwt.verify') < middleware.indexOf('req.financialContext='));
+  assert.doesNotMatch(middleware,/INSERT INTO financial_request_keys|res\.on\('finish'/);
 });
 
 test('financial idempotency hashes stable user id instead of raw authorization header', () => {
