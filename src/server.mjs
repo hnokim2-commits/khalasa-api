@@ -9,6 +9,7 @@ import { routeCompatibility, routePolicyFor } from './route-policy.mjs';
 import { startAutomatedBackups } from './automated-backup.mjs';
 import { registerFinancialWrites } from './financial-transactions.mjs';
 import { submitAdvanceSettlement } from './advance-settlements.mjs';
+import { registerCustomerRecovery } from './customer-recovery.mjs';
 const { Pool } = pg;
 
 const required = ['DATABASE_URL', 'JWT_SECRET'];
@@ -520,6 +521,7 @@ app.get('/v1/admin/documents',auth('admin'),asyncRoute(async(_req,res)=>{const [
 app.get('/v1/admin/documents/:kind/:id/view',auth('admin'),asyncRoute(async(req,res)=>{if(!['rider','merchant'].includes(req.params.kind))return res.status(400).json({error:'INVALID_DOCUMENT_KIND'});const table=req.params.kind==='rider'?'rider_documents':'merchant_documents',row=await pool.query(`SELECT private_storage_key FROM ${table} WHERE id=$1`,[req.params.id]);if(!row.rowCount)return res.status(404).json({error:'DOCUMENT_NOT_FOUND'});res.json({url:await signedPrivateUrl(row.rows[0].private_storage_key),expiresIn:300});}));
 app.patch('/v1/admin/documents/:kind/:id',auth('admin'),asyncRoute(async(req,res)=>{if(!['rider','merchant'].includes(req.params.kind)||!['approved','rejected'].includes(req.body.status))return res.status(400).json({error:'INVALID_DOCUMENT_REVIEW'});const table=req.params.kind==='rider'?'rider_documents':'merchant_documents',row=await pool.query(`UPDATE ${table} SET verification=$1,review_note=$2,reviewed_by=$3,reviewed_at=now() WHERE id=$4 RETURNING *`,[req.body.status,String(req.body.note||'').trim().slice(0,500)||null,req.user.sub,req.params.id]);if(!row.rowCount)return res.status(404).json({error:'DOCUMENT_NOT_FOUND'});if(req.params.kind==='merchant'){const merchantId=row.rows[0].merchant_id;if(req.body.status==='approved'){const complete=await pool.query(`SELECT count(DISTINCT document_type)::int count FROM merchant_documents WHERE merchant_id=$1 AND verification='approved'`,[merchantId]);if(complete.rows[0].count>=4)await pool.query(`UPDATE merchants SET verification='approved',is_accepting_orders=true WHERE id=$1`,[merchantId]);}else await pool.query(`UPDATE merchants SET verification='pending',is_accepting_orders=false WHERE id=$1`,[merchantId]);}res.json({document:row.rows[0]});}));
 
+registerCustomerRecovery({app,pool,auth,asyncRoute,rateLimit:authRateLimit,secret:process.env.JWT_SECRET});
 app.post('/v1/auth/request-otp', asyncRoute(async (req, res) => {
   const phone=String(req.body.phone||'').trim(),email=String(req.body.email||'').trim().toLowerCase();
   if(!/^01\d{9}$/.test(phone))return res.status(400).json({error:'INVALID_EGYPTIAN_PHONE'});
@@ -527,7 +529,7 @@ app.post('/v1/auth/request-otp', asyncRoute(async (req, res) => {
   const existing=await pool.query('SELECT role,phone,email,is_email_verified FROM users WHERE phone=$1 OR lower(email)=lower($2)',[phone,email]);
   if(existing.rows.some(user=>user.role!=='customer'))return res.status(403).json({error:'STAFF_ACCOUNT_REQUIRES_STAFF_LOGIN'});
   if(existing.rows.some(user=>user.email&&user.email.toLowerCase()===email&&user.phone!==phone))return res.status(409).json({error:'EMAIL_ALREADY_IN_USE'});
-  if(existing.rows.some(user=>user.phone===phone&&user.is_email_verified&&user.email?.toLowerCase()!==email))return res.status(409).json({error:'PHONE_ALREADY_IN_USE'});
+  if(existing.rows.some(user=>user.phone===phone&&user.email&&user.email.toLowerCase()!==email))return res.status(409).json({error:'PHONE_ALREADY_IN_USE'});
   if(process.env.NODE_ENV==='production'&&!['webhook','meta_whatsapp','resend_email'].includes(process.env.OTP_PROVIDER))return res.status(503).json({error:'OTP_PROVIDER_NOT_CONFIGURED'});
   const otp=crypto.randomInt(100000,1000000).toString(),hash=`v2:${crypto.createHmac('sha256',authOtpSecret()).update(`${phone}:${otp}`).digest('hex')}`;
   await pool.query(`UPDATE auth_challenges SET consumed_at=now() WHERE phone=$1 AND purpose='customer_login' AND consumed_at IS NULL`,[phone]);
@@ -550,7 +552,7 @@ app.post('/v1/auth/verify-otp',asyncRoute(async(req,res)=>{
     const conflicts=await client.query(`SELECT id,role,phone,email,is_email_verified FROM users WHERE phone=$1 OR lower(email)=lower($2) FOR UPDATE`,[phone,email]);
     if(conflicts.rows.some(user=>user.role!=='customer')){await client.query('ROLLBACK');return res.status(403).json({error:'STAFF_ACCOUNT_REQUIRES_STAFF_LOGIN'});}
     if(conflicts.rows.some(user=>user.email?.toLowerCase()===email&&user.phone!==phone)){await client.query('ROLLBACK');return res.status(409).json({error:'EMAIL_ALREADY_IN_USE'});}
-    if(conflicts.rows.some(user=>user.phone===phone&&user.is_email_verified&&user.email?.toLowerCase()!==email)){await client.query('ROLLBACK');return res.status(409).json({error:'PHONE_ALREADY_IN_USE'});}
+    if(conflicts.rows.some(user=>user.phone===phone&&user.email&&user.email.toLowerCase()!==email)){await client.query('ROLLBACK');return res.status(409).json({error:'PHONE_ALREADY_IN_USE'});}
     let user=await client.query('SELECT id,role,phone,full_name,email FROM users WHERE lower(email)=lower($1)',[email]);
     if(!user.rowCount)user=await client.query(`INSERT INTO users(role,phone,full_name,email,is_phone_verified,is_email_verified) VALUES('customer',$1,$2,$3,false,true) RETURNING id,role,phone,full_name,email`,[phone,fullName,email]);
     else user=await client.query(`UPDATE users SET full_name=$1,phone=$2,is_email_verified=true,updated_at=now() WHERE id=$3 RETURNING id,role,phone,full_name,email`,[fullName,phone,user.rows[0].id]);
