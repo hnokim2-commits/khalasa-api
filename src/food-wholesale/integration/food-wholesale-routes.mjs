@@ -1,11 +1,11 @@
 import {createFoodWholesaleService} from './food-wholesale-service.mjs';
-export function registerFoodWholesale(app,{pool,auth,asyncRoute,enabled=false,protectLegacy=enabled,ownerPhone}){
- const service=createFoodWholesaleService(pool);
+export function registerFoodWholesale(app,{pool,auth,asyncRoute,enabled=false,protectLegacy=enabled,ownerPhone,fixtureEnabled=false,testGrants}){
+ const service=createFoodWholesaleService(pool,{fixtureEnabled});
  const gate=(_req,res,next)=>enabled===true?next():res.status(404).json({error:'NOT_FOUND'});
  const actor=req=>({sub:req.user.sub,role:req.user.role,isMainAdmin:req.user.role==='admin'&&!!ownerPhone&&req.user.phone===ownerPhone});
  const key=req=>req.headers['x-idempotency-key'];
  const handle=work=>asyncRoute(async(req,res)=>{res.set('Cache-Control','no-store');try{res.json(await work(req))}catch(e){
-  const code=String(e.message||'');const status=code==='AUTH_REQUIRED'?401:/^(MAIN_ADMIN_REQUIRED|FORBIDDEN|PARTICIPANT_DENIED|ENROLLMENT_REQUIRED)$/.test(code)?403:/NOT_FOUND$/.test(code)?404:/^(REVISION_CONFLICT|IDEMPOTENCY_PAYLOAD_MISMATCH|QUOTE_CHANGED_RECONFIRM|QUOTE_EXPIRED|INSUFFICIENT_STOCK|PRODUCT_CHANGED_REQUOTE|NOT_QUOTABLE|NOT_ACCEPTABLE|NOT_RECEIVABLE|CANCELLATION_REQUIRES_REVIEW|OPEN_ACCEPTED_ORDER_PROFILE_LOCKED|ENROLLMENT_KIND_IMMUTABLE)$/.test(code)?409:null;
+  const code=String(e.message||'');const status=code==='AUTH_REQUIRED'?401:/^(MAIN_ADMIN_REQUIRED|FORBIDDEN|PARTICIPANT_DENIED|ENROLLMENT_REQUIRED|FIXTURE_PAIRING_REQUIRED)$/.test(code)?403:/NOT_FOUND$/.test(code)?404:/^(REVISION_CONFLICT|IDEMPOTENCY_PAYLOAD_MISMATCH|QUOTE_CHANGED_RECONFIRM|QUOTE_EXPIRED|INSUFFICIENT_STOCK|PRODUCT_CHANGED_REQUOTE|NOT_QUOTABLE|NOT_ACCEPTABLE|NOT_RECEIVABLE|CANCELLATION_REQUIRES_REVIEW|OPEN_ACCEPTED_ORDER_PROFILE_LOCKED|ENROLLMENT_KIND_IMMUTABLE|FIXTURE_ALREADY_ACTIVE|OTHER_FACTORY_ACTIVE)$/.test(code)?409:null;
   if(status)return res.status(status).json({error:code});
   if(e.code==='23505')return res.status(409).json({error:'ENROLLMENT_OR_KEY_CONFLICT'});
   if(e.code==='23514')return res.status(409).json({error:'FOOD_POLICY_CONSTRAINT'});
@@ -31,6 +31,7 @@ export function registerFoodWholesale(app,{pool,auth,asyncRoute,enabled=false,pr
  }
  app.put('/v1/admin/food-wholesale/enrollments/:id',gate,auth('admin'),handle(req=>service.enroll(actor(req),key(req),req.params.id,req.body)));
  app.get('/v1/admin/food-wholesale/overview',gate,auth('admin'),handle(req=>service.overview(actor(req))));
+ for(const action of ['prepare','revoke'])app.post('/v1/admin/food-wholesale/fixtures/'+action,gate,(_req,res,next)=>fixtureEnabled===true?next():res.status(404).json({error:'NOT_FOUND'}),auth('admin'),handle(req=>testGrants.run(actor(req),key(req),action,req.body)));
  const root='/v1/merchant/food-wholesale';
  app.get(root+'/me',gate,auth('merchant'),handle(req=>service.me(actor(req))));
  app.get(root+'/inventory',gate,auth('merchant'),handle(req=>service.inventory(actor(req))));

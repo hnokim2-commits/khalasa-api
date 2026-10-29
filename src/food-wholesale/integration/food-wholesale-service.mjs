@@ -5,7 +5,8 @@ const uuid=id=>typeof id==='string'&&/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a
 const canonical=value=>Array.isArray(value)?value.map(canonical):value&&typeof value==='object'?Object.fromEntries(Object.keys(value).sort().map(k=>[k,canonical(value[k])])):value;
 const fields=(body,allowed)=>{if(!body||typeof body!=='object'||Array.isArray(body)||Object.keys(body).some(k=>!allowed.includes(k)))fail('INVALID_FIELDS')};
 const digest=(operation,body)=>crypto.createHash('sha256').update(JSON.stringify(canonical({operation,body}))).digest('hex');
-export function createFoodWholesaleService(pool,{clock=()=>new Date().toISOString()}={}){
+export function createFoodWholesaleService(pool,{clock=()=>new Date().toISOString(),fixtureEnabled=false}={}){
+ const eligible="(m.verification='approved' OR "+(fixtureEnabled?'food_wholesale_is_test_grant(m.id)':'false')+")";
  async function transaction(actor,key,operation,body,work){
   if(!uuid(actor?.sub))fail('AUTH_REQUIRED');
   if(typeof key!=='string'||!/^[A-Za-z0-9_-]{16,100}$/.test(key))fail('IDEMPOTENCY_KEY_REQUIRED');
@@ -20,23 +21,23 @@ export function createFoodWholesaleService(pool,{clock=()=>new Date().toISOStrin
   }catch(error){await client.query('ROLLBACK').catch(()=>{});throw error}finally{client.release()}
  }
  async function member(client,id,kind){
-  const r=await client.query(`SELECT m.id,m.owner_user_id FROM merchants m JOIN food_wholesale_enrollments e ON e.merchant_id=m.id WHERE m.id=$1 AND m.verification='approved' AND e.active AND e.kind=$2 FOR SHARE OF m,e`,[id,kind]);
+  const r=await client.query(`SELECT m.id,m.owner_user_id,food_wholesale_is_test_grant(m.id) fixture_only FROM merchants m JOIN food_wholesale_enrollments e ON e.merchant_id=m.id WHERE m.id=$1 AND ${eligible} AND e.active AND e.kind=$2 FOR SHARE OF m,e`,[id,kind]);
   if(!r.rowCount)fail('ENROLLMENT_REQUIRED');return r.rows[0];
  }
  async function parties(client,buyerId,supplierId){
-  const result={};for(const [id,kind] of [[buyerId,'buyer'],[supplierId,'supplier']].sort((a,b)=>a[0].localeCompare(b[0])))result[kind]=await member(client,id,kind);return result;
+  const result={};for(const [id,kind] of [[buyerId,'buyer'],[supplierId,'supplier']].sort((a,b)=>a[0].localeCompare(b[0])))result[kind]=await member(client,id,kind);if(result.buyer.fixture_only!==result.supplier.fixture_only)fail('FIXTURE_PAIRING_REQUIRED');return result;
  }
  async function ownMember(client,actor,kind){
   if(actor.role!=='merchant')fail('FORBIDDEN');
-  const r=await client.query(`SELECT m.id FROM merchants m JOIN food_wholesale_enrollments e ON e.merchant_id=m.id WHERE m.owner_user_id=$1 AND e.kind=$2 AND e.active AND m.verification='approved' ORDER BY m.id LIMIT 2`,[actor.sub,kind]);
+  const r=await client.query(`SELECT m.id FROM merchants m JOIN food_wholesale_enrollments e ON e.merchant_id=m.id WHERE m.owner_user_id=$1 AND e.kind=$2 AND e.active AND ${eligible} ORDER BY m.id LIMIT 2`,[actor.sub,kind]);
   if(r.rowCount!==1)fail('ENROLLMENT_REQUIRED');return r.rows[0].id;
  }
  async function product(client,id,now,locked=true){
   if(!uuid(id))fail('INVALID_PRODUCT_ID');
-  const r=await client.query(`SELECT p.*,f.batch_code,f.production_date::text,f.expiry_date::text,f.units_per_carton,f.unit_weight_grams,f.storage,f.storage_instructions FROM products p JOIN food_wholesale_profiles f ON f.product_id=p.id WHERE p.id=$1 ${locked?'FOR UPDATE OF p,f':''}`,[id]);
+  const r=await client.query(`SELECT p.*,food_wholesale_is_test_grant(p.merchant_id) fixture_only,f.batch_code,f.production_date::text,f.expiry_date::text,f.units_per_carton,f.unit_weight_grams,f.storage,f.storage_instructions FROM products p JOIN food_wholesale_profiles f ON f.product_id=p.id WHERE p.id=$1 ${locked?'FOR UPDATE OF p,f':''}`,[id]);
   if(!r.rowCount)fail('FOOD_PRODUCT_NOT_FOUND');const p=r.rows[0];
   if(p.sale_unit!=='carton'||!p.wholesale_enabled||!p.is_available||p.wholesale_pack_size!==p.units_per_carton)fail('PRODUCT_NOT_READY');
-  return validateProduct({id:p.id,supplierId:p.merchant_id,supplierApproved:true,name:p.name,storage:p.storage,storageInstructions:p.storage_instructions,batchCode:p.batch_code,productionDate:p.production_date,expiryDate:p.expiry_date,unitsPerCarton:p.units_per_carton,unitWeightGrams:p.unit_weight_grams,minCartons:p.wholesale_min_quantity,stockCartons:p.stock_quantity,cartonPricePiastres:moneyToPiastres(String(p.wholesale_price))},now);
+  return validateProduct({id:p.id,fixtureOnly:p.fixture_only===true,supplierId:p.merchant_id,supplierApproved:true,name:p.name,storage:p.storage,storageInstructions:p.storage_instructions,batchCode:p.batch_code,productionDate:p.production_date,expiryDate:p.expiry_date,unitsPerCarton:p.units_per_carton,unitWeightGrams:p.unit_weight_grams,minCartons:p.wholesale_min_quantity,stockCartons:p.stock_quantity,cartonPricePiastres:moneyToPiastres(String(p.wholesale_price))},now);
  }
  async function event(client,actor,action,id,snapshot){await client.query('INSERT INTO food_wholesale_events(actor_user_id,action,entity_id,snapshot) VALUES($1,$2,$3,$4::jsonb)',[actor.sub,action,id,JSON.stringify(snapshot)])}
  async function save(client,actor,action,state,oldRevision){
@@ -48,8 +49,8 @@ export function createFoodWholesaleService(pool,{clock=()=>new Date().toISOStrin
  return {
   async me(actor){
    if(actor.role!=='merchant')fail('FORBIDDEN');
-   const r=await pool.query(`SELECT m.id,m.display_name,m.verification,e.kind,e.active FROM merchants m LEFT JOIN food_wholesale_enrollments e ON e.merchant_id=m.id WHERE m.owner_user_id=$1 ORDER BY m.id LIMIT 2`,[actor.sub]);
-   if(r.rowCount!==1)fail('MERCHANT_PROFILE_NOT_FOUND');const m=r.rows[0];return {merchantId:m.id,displayName:m.display_name,kind:m.kind||null,active:m.verification==='approved'&&m.active===true};
+   const r=await pool.query(`SELECT m.id,m.display_name,m.verification,e.kind,e.active,food_wholesale_is_test_grant(m.id) fixture_active,EXISTS(SELECT 1 FROM food_wholesale_test_grants g WHERE g.merchant_id=m.id) fixture_only,(SELECT expires_at FROM food_wholesale_test_grants g WHERE g.merchant_id=m.id) fixture_expires_at FROM merchants m LEFT JOIN food_wholesale_enrollments e ON e.merchant_id=m.id WHERE m.owner_user_id=$1 ORDER BY m.id LIMIT 2`,[actor.sub]);
+   if(r.rowCount!==1)fail('MERCHANT_PROFILE_NOT_FOUND');const m=r.rows[0];return {merchantId:m.id,displayName:m.display_name,kind:m.kind||null,active:(m.verification==='approved'||fixtureEnabled&&m.fixture_active===true)&&m.active===true,fixtureOnly:m.fixture_only===true,fixtureExpiresAt:m.fixture_expires_at};
   },
   async inventory(actor){
    const c=await pool.connect();try{const id=await ownMember(c,actor,'supplier');
@@ -59,9 +60,9 @@ export function createFoodWholesaleService(pool,{clock=()=>new Date().toISOStrin
   },
   async overview(actor){
    if(actor.role!=='admin'||actor.isMainAdmin!==true)fail('MAIN_ADMIN_REQUIRED');
-   const merchants=await pool.query(`SELECT m.id,m.display_name,e.kind,e.active,e.review_reference FROM merchants m LEFT JOIN food_wholesale_enrollments e ON e.merchant_id=m.id WHERE m.verification='approved' ORDER BY m.display_name,m.id LIMIT 200`);
+   const merchants=await pool.query(`SELECT m.id,m.display_name,e.kind,e.active,e.review_reference,food_wholesale_is_test_grant(m.id) fixture_only FROM merchants m LEFT JOIN food_wholesale_enrollments e ON e.merchant_id=m.id WHERE ${eligible} ORDER BY m.display_name,m.id LIMIT 200`);
    const orders=await pool.query(`SELECT f.state,b.display_name buyer_name,s.display_name supplier_name FROM food_wholesale_workflows f JOIN wholesale_requests w ON w.id=f.request_id JOIN merchants b ON b.id=w.buyer_merchant_id JOIN merchants s ON s.id=w.supplier_merchant_id ORDER BY w.created_at DESC LIMIT 100`);
-   return {merchants:merchants.rows.map(m=>({merchantId:m.id,displayName:m.display_name,kind:m.kind||null,active:m.active===true,reference:m.review_reference||''})),requests:orders.rows.map(r=>({...r.state,buyerName:r.buyer_name,supplierName:r.supplier_name}))};
+   return {fixtureModeEnabled:fixtureEnabled,merchants:merchants.rows.map(m=>({merchantId:m.id,displayName:m.display_name,kind:m.kind||null,active:m.active===true,reference:m.review_reference||'',fixtureOnly:m.fixture_only===true})),requests:orders.rows.map(r=>({...r.state,buyerName:r.buyer_name,supplierName:r.supplier_name}))};
   },
   async enroll(actor,key,id,body){
    if(!uuid(id))fail('INVALID_MERCHANT_ID');fields(body,['kind','active','reference']);
@@ -87,19 +88,19 @@ export function createFoodWholesaleService(pool,{clock=()=>new Date().toISOStrin
    });
   },
   async catalog(actor){
-   const c=await pool.connect();try{await ownMember(c,actor,'buyer');const rows=await c.query(`SELECT p.id FROM products p JOIN food_wholesale_profiles f ON f.product_id=p.id JOIN food_wholesale_enrollments e ON e.merchant_id=p.merchant_id JOIN merchants m ON m.id=p.merchant_id WHERE e.kind='supplier' AND e.active AND m.verification='approved' AND f.expiry_date>CURRENT_DATE AND p.is_available AND p.wholesale_enabled ORDER BY p.id LIMIT 100`);
+   const c=await pool.connect();try{const buyerId=await ownMember(c,actor,'buyer');const rows=await c.query(`SELECT p.id FROM products p JOIN food_wholesale_profiles f ON f.product_id=p.id JOIN food_wholesale_enrollments e ON e.merchant_id=p.merchant_id JOIN merchants m ON m.id=p.merchant_id WHERE e.kind='supplier' AND e.active AND ${eligible} AND f.expiry_date>CURRENT_DATE AND p.is_available AND p.wholesale_enabled AND food_wholesale_is_test_grant(p.merchant_id)=food_wholesale_is_test_grant($1::uuid) ORDER BY p.id LIMIT 100`,[buyerId]);
     const products=[];for(const row of rows.rows){try{products.push(await product(c,row.id,clock(),false))}catch(e){if(!['PRODUCT_NOT_READY','INVALID_SHELF_LIFE','INVALID_CARTON_QUANTITY','INVALID_CARTON_PRICE'].includes(e.message))throw e}}return {products};
    }finally{c.release()}
   },
   async list(actor){
    if(actor.role!=='merchant')fail('FORBIDDEN');
-   const r=await pool.query(`SELECT f.state FROM food_wholesale_workflows f JOIN wholesale_requests w ON w.id=f.request_id JOIN merchants m ON m.id IN(w.buyer_merchant_id,w.supplier_merchant_id) JOIN food_wholesale_enrollments e ON e.merchant_id=m.id WHERE m.owner_user_id=$1 AND e.active AND m.verification='approved' ORDER BY w.created_at DESC LIMIT 100`,[actor.sub]);return {requests:r.rows.map(x=>x.state)};
+   const r=await pool.query(`SELECT f.state FROM food_wholesale_workflows f JOIN wholesale_requests w ON w.id=f.request_id JOIN merchants m ON m.id IN(w.buyer_merchant_id,w.supplier_merchant_id) JOIN food_wholesale_enrollments e ON e.merchant_id=m.id WHERE m.owner_user_id=$1 AND e.active AND ${eligible} ORDER BY w.created_at DESC LIMIT 100`,[actor.sub]);return {requests:r.rows.map(x=>x.state)};
   },
   async request(actor,key,body){
    fields(body,['productId','cartons']);if(!uuid(body.productId))fail('INVALID_PRODUCT_ID');
    return transaction(actor,key,'request',body,async(c,now)=>{
     const buyerId=await ownMember(c,actor,'buyer'),p=(await c.query('SELECT merchant_id FROM products WHERE id=$1',[body.productId])).rows[0];if(!p)fail('FOOD_PRODUCT_NOT_FOUND');
-    await parties(c,buyerId,p.merchant_id);const item=await product(c,body.productId,now);const state=createRequest({buyer:{merchantId:buyerId,approved:true},product:item,cartons:body.cartons,now});
+    await parties(c,buyerId,p.merchant_id);const item=await product(c,body.productId,now);const state=createRequest({buyer:{merchantId:buyerId,approved:true},product:item,cartons:body.cartons,now});state.fixtureOnly=item.fixtureOnly===true;
     await c.query(`INSERT INTO wholesale_requests(id,buyer_merchant_id,supplier_merchant_id,product_id,quantity,requested_unit_price,request_key) VALUES($1,$2,$3,$4,$5,$6,$7)`,[state.id,buyerId,item.supplierId,item.id,state.cartons,item.cartonPricePiastres/100,key]);
     await c.query('INSERT INTO food_wholesale_workflows(request_id,revision,state) VALUES($1,1,$2::jsonb)',[state.id,JSON.stringify(state)]);await event(c,actor,'request',state.id,state);return state;
    });
