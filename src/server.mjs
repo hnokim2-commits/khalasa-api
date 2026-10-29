@@ -10,6 +10,7 @@ import { startAutomatedBackups } from './automated-backup.mjs';
 import { registerFinancialWrites } from './financial-transactions.mjs';
 import { submitAdvanceSettlement } from './advance-settlements.mjs';
 import { registerCustomerRecovery } from './customer-recovery.mjs';
+import {registerOrderMessages} from './order-messages.mjs';
 const { Pool } = pg;
 
 const required = ['DATABASE_URL', 'JWT_SECRET'];
@@ -522,6 +523,7 @@ app.get('/v1/admin/documents/:kind/:id/view',auth('admin'),asyncRoute(async(req,
 app.patch('/v1/admin/documents/:kind/:id',auth('admin'),asyncRoute(async(req,res)=>{if(!['rider','merchant'].includes(req.params.kind)||!['approved','rejected'].includes(req.body.status))return res.status(400).json({error:'INVALID_DOCUMENT_REVIEW'});const table=req.params.kind==='rider'?'rider_documents':'merchant_documents',row=await pool.query(`UPDATE ${table} SET verification=$1,review_note=$2,reviewed_by=$3,reviewed_at=now() WHERE id=$4 RETURNING *`,[req.body.status,String(req.body.note||'').trim().slice(0,500)||null,req.user.sub,req.params.id]);if(!row.rowCount)return res.status(404).json({error:'DOCUMENT_NOT_FOUND'});if(req.params.kind==='merchant'){const merchantId=row.rows[0].merchant_id;if(req.body.status==='approved'){const complete=await pool.query(`SELECT count(DISTINCT document_type)::int count FROM merchant_documents WHERE merchant_id=$1 AND verification='approved'`,[merchantId]);if(complete.rows[0].count>=4)await pool.query(`UPDATE merchants SET verification='approved',is_accepting_orders=true WHERE id=$1`,[merchantId]);}else await pool.query(`UPDATE merchants SET verification='pending',is_accepting_orders=false WHERE id=$1`,[merchantId]);}res.json({document:row.rows[0]});}));
 
 registerCustomerRecovery({app,pool,auth,asyncRoute,rateLimit:authRateLimit,secret:process.env.JWT_SECRET});
+registerOrderMessages(app,{pool,auth,asyncRoute});
 app.post('/v1/auth/request-otp', asyncRoute(async (req, res) => {
   const phone=String(req.body.phone||'').trim(),email=String(req.body.email||'').trim().toLowerCase();
   if(!/^01\d{9}$/.test(phone))return res.status(400).json({error:'INVALID_EGYPTIAN_PHONE'});
