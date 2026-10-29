@@ -1,6 +1,8 @@
+import {assertFoodTarget} from './food-wholesale/integration/food-staging-target.mjs';
 import 'dotenv/config';
 import { readdir, readFile } from 'node:fs/promises';
 import pg from 'pg';
+assertFoodTarget(process.env);
 const { Pool } = pg;
 if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL is required');
 const databaseSsl = process.env.NODE_ENV === 'production'

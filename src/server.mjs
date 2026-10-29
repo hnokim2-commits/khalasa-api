@@ -1,3 +1,6 @@
+import {assertFoodTarget} from './food-wholesale/integration/food-staging-target.mjs';
+import {registerFoodWholesale} from './food-wholesale/integration/food-wholesale-routes.mjs';
+import {fileURLToPath as foodFilePath} from 'node:url';
 import 'dotenv/config';
 import crypto from 'node:crypto';
 import express from 'express';
@@ -14,6 +17,8 @@ import { storageFailureCode } from './storage-failure.mjs';
 import { registerFinancialWrites } from './financial-transactions.mjs';
 import { submitAdvanceSettlement } from './advance-settlements.mjs';
 import { registerEmailDeliveryTest } from './email-delivery-test.mjs';
+const foodTarget=assertFoodTarget(process.env);
+const foodEnabled=foodTarget==='local'||process.env.FOOD_WHOLESALE_ENABLED==='true';
 const { Pool } = pg;
 
 const required = ['DATABASE_URL', 'JWT_SECRET'];
@@ -245,7 +250,7 @@ async function merchantActivationState(ownerUserId,merchantId=null,db=pool){
   return {merchant,operational:!!merchant&&merchant.verification==='approved'&&merchant.is_accepting_orders===true&&merchant.legal_accepted&&Number(merchant.approved_documents)>=4};
 }
 function isMerchantOperationalWrite(req){
-  return !['GET','HEAD','OPTIONS'].includes(req.method)&&(/^\/v1\/merchant\/(products|wholesale)(?:\/|$)/.test(req.path)||/^\/v1\/orders\/[^/]+\/(merchant-accept|ready|cancel)$/.test(req.path));
+  return !['GET','HEAD','OPTIONS'].includes(req.method)&&(/^\/v1\/merchant\/(products|wholesale|food-wholesale)(?:\/|$)/.test(req.path)||/^\/v1\/orders\/[^/]+\/(merchant-accept|ready|cancel)$/.test(req.path));
 }
 app.use((req,res,next)=>{
   if(!isMerchantOperationalWrite(req))return next();
@@ -338,6 +343,8 @@ app.put('/v1/investor/users/:userId/access-scope',auth('investor'),investorPermi
 }));
 app.use(/^\/v1\/admin\/investors\/[^/]+\/users$/,asyncRoute(async(req,res,next)=>{if(req.method!=='POST')return next();return auth('admin')(req,res,async()=>{const phone=String(req.body?.phone||'').trim().replace(/\s+/g,''),investorId=/\/v1\/admin\/investors\/([^/]+)\/users/.exec(req.originalUrl)?.[1];if(!phone||!investorId)return next();const existing=await pool.query(`SELECT a.investor_id FROM users u JOIN investor_user_assignments a ON a.user_id=u.id WHERE u.phone=$1`,[phone]);if(existing.rowCount&&existing.rows[0].investor_id!==investorId)return res.status(409).json({error:'INVESTOR_USER_TENANT_CHANGE_FORBIDDEN'});next();});}));
 registerOrderMessages(app,{pool,auth,asyncRoute});
+registerFoodWholesale(app,{pool,auth,asyncRoute,ownerPhone,enabled:foodEnabled,protectLegacy:true});
+if(foodEnabled)app.use('/food-wholesale',express.static(foodFilePath(new URL('./food-wholesale/web/',import.meta.url)),{setHeaders:res=>{res.set('Cache-Control','no-store');res.set('Content-Security-Policy',"default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'");res.set('Referrer-Policy','no-referrer')}}));
 registerOrderVoice(app,{pool,auth,asyncRoute});
 function transitionAllowed(from, to) { return ({ awaiting_merchant:['preparing','cancelled'], preparing:['awaiting_rider','cancelled'], awaiting_rider:['assigned','cancelled'], assigned:['picked_up','cancelled'], picked_up:['delivered'], delivered:[], cancelled:[] })[from]?.includes(to); }
 function operationalError(code,status=409,details={}){const error=new Error(code);error.status=status;error.code=code;error.details=details;return error;}
