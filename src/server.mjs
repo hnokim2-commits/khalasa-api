@@ -1,3 +1,6 @@
+import {assertFoodProductionTarget} from './food-wholesale/integration/food-production-target.mjs';
+import {registerFoodWholesale} from './food-wholesale/integration/food-wholesale-routes.mjs';
+import {fileURLToPath as foodFilePath} from 'node:url';
 import 'dotenv/config';
 import crypto from 'node:crypto';
 import express from 'express';
@@ -11,6 +14,8 @@ import { registerFinancialWrites } from './financial-transactions.mjs';
 import { submitAdvanceSettlement } from './advance-settlements.mjs';
 import { registerCustomerRecovery } from './customer-recovery.mjs';
 import {registerOrderMessages} from './order-messages.mjs';
+const foodTarget=assertFoodProductionTarget(process.env);
+const foodEnabled=foodTarget==='local'||process.env.FOOD_WHOLESALE_ENABLED==='true';
 const { Pool } = pg;
 
 const required = ['DATABASE_URL', 'JWT_SECRET'];
@@ -22,6 +27,7 @@ const port = Number(process.env.PORT || 8080);
 const releaseVersion = String(process.env.RELEASE_VERSION || 'v184').trim().slice(0,40);
 const commissionRate = Number(process.env.PLATFORM_COMMISSION_RATE || 0.12);
 const allowedOrigins = (process.env.CORS_ORIGINS || '').split(',').map(value=>value.trim().replace(/\/$/, '')).filter(Boolean);
+if(foodEnabled&&foodTarget==='production'&&!allowedOrigins.includes('https://khalasa-api.onrender.com'))allowedOrigins.push('https://khalasa-api.onrender.com');
 const databaseSsl = process.env.NODE_ENV === 'production'
   ? { rejectUnauthorized: process.env.DB_SSL_REJECT_UNAUTHORIZED !== 'false' }
   : false;
@@ -441,10 +447,10 @@ app.get('/v1/realtime',auth(),(req,res)=>{
 app.get('/v1/catalog', asyncRoute(async (_req,res)=>{
   let rows;
   try {
-    rows=await pool.query(`SELECT p.id product_id,p.name product_name,p.price,p.stock_quantity,p.sale_unit,p.image_url,m.id merchant_id,m.display_name merchant_name,m.image_url merchant_image_url,m.category,m.minimum_order,m.city_id,c.name city_name,c.governorate FROM products p JOIN merchants m ON m.id=p.merchant_id LEFT JOIN cities c ON c.id=m.city_id WHERE p.is_available=true AND p.stock_quantity>0 AND m.is_accepting_orders=true AND m.verification='approved' ORDER BY m.display_name,p.name LIMIT 200`);
+    rows=await pool.query(`SELECT p.id product_id,p.name product_name,p.price,p.stock_quantity,p.sale_unit,p.image_url,m.id merchant_id,m.display_name merchant_name,m.image_url merchant_image_url,m.category,m.minimum_order,m.city_id,c.name city_name,c.governorate FROM products p JOIN merchants m ON m.id=p.merchant_id LEFT JOIN cities c ON c.id=m.city_id WHERE p.is_available=true AND p.stock_quantity>0 AND m.is_accepting_orders=true AND m.verification='approved' AND NOT EXISTS(SELECT 1 FROM food_wholesale_profiles f WHERE f.product_id=p.id) ORDER BY m.display_name,p.name LIMIT 200`);
   } catch (error) {
     if (error?.code !== '42703') throw error;
-    rows=await pool.query(`SELECT p.id product_id,p.name product_name,p.price,p.stock_quantity,p.sale_unit,NULL::text image_url,m.id merchant_id,m.display_name merchant_name,NULL::text merchant_image_url,m.category,m.minimum_order,m.city_id,c.name city_name,c.governorate FROM products p JOIN merchants m ON m.id=p.merchant_id LEFT JOIN cities c ON c.id=m.city_id WHERE p.is_available=true AND p.stock_quantity>0 AND m.is_accepting_orders=true AND m.verification='approved' ORDER BY m.display_name,p.name LIMIT 200`);
+    rows=await pool.query(`SELECT p.id product_id,p.name product_name,p.price,p.stock_quantity,p.sale_unit,NULL::text image_url,m.id merchant_id,m.display_name merchant_name,NULL::text merchant_image_url,m.category,m.minimum_order,m.city_id,c.name city_name,c.governorate FROM products p JOIN merchants m ON m.id=p.merchant_id LEFT JOIN cities c ON c.id=m.city_id WHERE p.is_available=true AND p.stock_quantity>0 AND m.is_accepting_orders=true AND m.verification='approved' AND NOT EXISTS(SELECT 1 FROM food_wholesale_profiles f WHERE f.product_id=p.id) ORDER BY m.display_name,p.name LIMIT 200`);
   }
   res.json({products:rows.rows});
 }));
@@ -524,6 +530,8 @@ app.patch('/v1/admin/documents/:kind/:id',auth('admin'),asyncRoute(async(req,res
 
 registerCustomerRecovery({app,pool,auth,asyncRoute,rateLimit:authRateLimit,secret:process.env.JWT_SECRET});
 registerOrderMessages(app,{pool,auth,asyncRoute});
+registerFoodWholesale(app,{pool,auth,asyncRoute,ownerPhone,enabled:foodEnabled,protectLegacy:true});
+if(foodEnabled)app.use('/food-wholesale',express.static(foodFilePath(new URL('./food-wholesale/web/',import.meta.url)),{setHeaders:res=>{res.set('Cache-Control','no-store');res.set('Content-Security-Policy',"default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'");res.set('Referrer-Policy','no-referrer')}}));
 app.post('/v1/auth/request-otp', asyncRoute(async (req, res) => {
   const phone=String(req.body.phone||'').trim(),email=String(req.body.email||'').trim().toLowerCase();
   if(!/^01\d{9}$/.test(phone))return res.status(400).json({error:'INVALID_EGYPTIAN_PHONE'});
@@ -587,6 +595,7 @@ app.post('/v1/orders', auth('customer'), asyncRoute(async (req, res) => {
     if(!merchant.rowCount){await client.query('ROLLBACK');return res.status(404).json({error:'MERCHANT_NOT_AVAILABLE'});}
     const productIds=[...new Set(requested.map(item=>item.productId))];
     const products=await client.query('SELECT id,name,price,stock_quantity FROM products WHERE merchant_id=$1 AND is_available=true AND id=ANY($2::uuid[]) FOR UPDATE',[merchantId,productIds]);
+    const protectedFood=await client.query('SELECT 1 FROM food_wholesale_profiles WHERE product_id=ANY($1::uuid[]) LIMIT 1',[productIds]);if(protectedFood.rowCount){await client.query('ROLLBACK');return res.status(409).json({error:'FOOD_PRODUCT_NOT_RETAIL'});}
     const catalog=new Map(products.rows.map(product=>[product.id,product]));
     if(catalog.size!==productIds.length){await client.query('ROLLBACK');return res.status(409).json({error:'PRODUCT_NOT_AVAILABLE'});}if(requested.some(item=>Number(catalog.get(item.productId).stock_quantity)<item.quantity)){await client.query('ROLLBACK');return res.status(409).json({error:'INSUFFICIENT_PRODUCT_STOCK'});}
     const normalized=requested.map(item=>({productId:item.productId,productName:catalog.get(item.productId).name,quantity:item.quantity,unitPrice:Number(catalog.get(item.productId).price)}));
